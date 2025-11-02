@@ -2,6 +2,7 @@ import pygame
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import Tuple, Dict, List, Tuple as Tup
 from src.sand import SandSystem, SandParticle
 from src.water import WaterSystem, WaterParticle
@@ -9,6 +10,7 @@ from src.lava import LavaSystem, LavaParticle
 from src.npc import NPC
 from src.opt import get_or_create_optimizations
 from src.scaling import recommend_settings
+from src.zoom import Camera
 
 # Detect GPU API availability once; the decision to USE it is based on benchmark config
 GPU_AVAILABLE = False
@@ -28,8 +30,9 @@ class ParticleGame:
 
         self.width = width
         self.height = height
-        self.sidebar_width = self._compute_sidebar_width(width)
-        self.game_width = width - self.sidebar_width
+        # No sidebar; full width is game area
+        self.sidebar_width = 0
+        self.game_width = width
 
         # Show black CPU window immediately
         self.screen = pygame.display.set_mode((width, height), pygame.RESIZABLE | pygame.DOUBLEBUF)
@@ -57,15 +60,66 @@ class ParticleGame:
         self.sand_system = SandSystem(self.game_width, height)
         self.water_system = WaterSystem(self.game_width, height)
         self.lava_system = LavaSystem(self.game_width, height)
+        # Camera for pan/zoom inside game area
+        self.camera = Camera(world_w=self.game_width, world_h=self.height, view_w=self.game_width, view_h=self.height)
         
         # Current tool selection
         self.current_tool = "sand"  # "sand" or "water"
         self.brush_size = 5
         self.is_drawing = False
         
-        # UI Elements
+        # Overlay UI (no sidebar)
         self.buttons = {}
-        self._layout_ui()
+        self.ui_show_spawn = False
+        # Tunable overlay sizes
+        self.ui_icon_size = 56
+        # Bigger spawn menu by default
+        self.ui_menu_size = (460, 340)  # width, height
+        # Header height for the spawn menu (used by layout and drawing)
+        self.ui_header_h = 36
+        # Grid columns for spawn tiles (horizontal row)
+        self.ui_grid_cols = 4
+        # Load UI images (robust path resolution)
+        self.ui_flask_surf = self._load_image("src/assets/flask.png")
+        if not self.ui_flask_surf:
+            self.ui_flask_surf = pygame.Surface((32, 32), pygame.SRCALPHA)
+            self.ui_flask_surf.fill((220, 220, 220, 255))
+        self.ui_water_surf = self._load_image("src/assets/water.png")
+        if not self.ui_water_surf:
+            self.ui_water_surf = pygame.Surface((64, 64), pygame.SRCALPHA)
+            self.ui_water_surf.fill((80, 140, 255, 255))
+        # Sand icon (now with image support)
+        self.ui_sand_surf = self._load_image("src/assets/Sand.png")
+        if not self.ui_sand_surf:
+            self.ui_sand_surf = pygame.Surface((64, 64), pygame.SRCALPHA)
+            self.ui_sand_surf.fill((200, 180, 120, 255))
+        # Lava icon
+        self.ui_lava_surf = self._load_image("src/assets/Lava.png")
+        if not self.ui_lava_surf:
+            self.ui_lava_surf = pygame.Surface((64, 64), pygame.SRCALPHA)
+            self.ui_lava_surf.fill((255, 120, 60, 255))
+        # NPC icon
+        self.ui_npc_surf = self._load_image("src/assets/npc.png")
+        if not self.ui_npc_surf:
+            self.ui_npc_surf = pygame.Surface((64, 64), pygame.SRCALPHA)
+            self.ui_npc_surf.fill((180, 180, 200, 255))
+        self._ui_flask_tex = None
+        self._ui_water_tex = None
+        self._ui_sand_tex = None
+        self._ui_lava_tex = None
+        self._ui_npc_tex = None
+
+        # Spawn menu tiles definition (order matters)
+        # For now we have an image only for water; others will render as colored tiles with labels
+        self.ui_tiles = [
+            {"key": "sand", "label": "SAND", "color": (200, 180, 120), "surf": self.ui_sand_surf},
+            {"key": "water", "label": "WATER", "color": (80, 140, 255), "surf": self.ui_water_surf},
+            {"key": "lava", "label": "LAVA", "color": (255, 120, 60), "surf": self.ui_lava_surf},
+            {"key": "npc", "label": "NPC", "color": (180, 180, 200), "surf": self.ui_npc_surf},
+        ]
+        self.ui_tile_rects = {}
+        # Recompute layout now that tiles are defined
+        self._layout_overlay_ui()
         
         # FPS tracking and HUD cache
         self.fps = 0
@@ -80,6 +134,9 @@ class ParticleGame:
         # NPC state (spawn on demand)
         self.npc = None
         self.npc_drag_index = None
+        # Panning state
+        self._pan_active = False
+        self._pan_prev = None
 
     def _get_text_texture(self, text: str, color: Tup[int, int, int]) -> "Texture":
         """Cache and return a Texture for text rendering in GPU mode."""
@@ -90,6 +147,93 @@ class ParticleGame:
         tex = Texture.from_surface(self.renderer, surf)
         self._text_cache[key] = tex
         return tex
+
+    def _load_image(self, rel_path: str):
+        """Load an image robustly from several candidate locations.
+        Returns a Surface with per-pixel alpha or None on failure.
+        """
+        candidates = [
+            Path(rel_path),
+            Path(__file__).resolve().parent / rel_path,
+            Path(__file__).resolve().parent / rel_path.lstrip("./"),
+        ]
+        # Direct exact-path attempts first (fast path)
+        for p in candidates:
+            try:
+                if p.is_file():
+                    return pygame.image.load(str(p)).convert_alpha()
+            except Exception:
+                continue
+
+        # Case-insensitive fallback: search in candidate directories for a filename match ignoring case
+        try:
+            target = Path(rel_path).name.lower()
+            dir_candidates = []
+            # Direct parent (relative to CWD)
+            pr = Path(rel_path)
+            dir_candidates.append(pr if pr.is_dir() else pr.parent)
+            # Parent relative to this file's directory
+            dir_candidates.append((Path(__file__).resolve().parent / (pr if pr.is_dir() else pr.parent)))
+            # Also include explicit src/assets under this file if rel_path points there
+            dir_candidates.append(Path(__file__).resolve().parent / "src" / "assets")
+
+            seen = set()
+            for d in dir_candidates:
+                try:
+                    d = d.resolve()
+                except Exception:
+                    continue
+                if not d.exists() or not d.is_dir():
+                    continue
+                if str(d) in seen:
+                    continue
+                seen.add(str(d))
+                for child in d.iterdir():
+                    try:
+                        if child.is_file() and child.name.lower() == target:
+                            return pygame.image.load(str(child)).convert_alpha()
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
+        # Last resort: try pygame's default loader with given path
+        try:
+            return pygame.image.load(rel_path).convert_alpha()
+        except Exception:
+            return None
+
+    def _layout_overlay_ui(self):
+        # Icon at top-left
+        self.ui_flask_rect = pygame.Rect(10, 10, self.ui_icon_size, self.ui_icon_size)
+        # Menu to the right of icon
+        mw, mh = self.ui_menu_size
+        self.ui_menu_rect = pygame.Rect(self.ui_flask_rect.right + 10, 10, mw, mh)
+        # Compute grid for tiles
+        gpad = 16
+        gap = 12
+        header_h = getattr(self, 'ui_header_h', 36)
+        area_x = self.ui_menu_rect.x + gpad
+        area_y = self.ui_menu_rect.y + header_h + gpad
+        area_w = mw - 2 * gpad
+        area_h = mh - header_h - 2 * gpad - 20  # reserve some space for labels
+
+        cols = max(1, int(getattr(self, 'ui_grid_cols', 2)))
+        rows = max(1, (len(getattr(self, 'ui_tiles', [])) + cols - 1) // cols)
+        # Prefer compact tiles; clamp to avoid oversized visuals
+        tile_w_avail = max(1, (area_w - (cols - 1) * gap) // cols)
+        tile_h_avail = max(1, (area_h - (rows - 1) * gap) // rows)
+        tile_w = max(64, min(90, tile_w_avail))
+        tile_h = max(64, min(96, tile_h_avail))
+
+        # Build rects per tile in order
+        self.ui_tile_rects = {}
+        for idx, tile in enumerate(getattr(self, 'ui_tiles', [])):
+            r = idx // cols
+            c = idx % cols
+            x = area_x + c * (tile_w + gap)
+            y = area_y + r * (tile_h + gap)
+            self.ui_tile_rects[tile["key"]] = pygame.Rect(x, y, tile_w, tile_h)
         
     def handle_events(self) -> bool:
         """Handle pygame events. Returns False if game should quit."""
@@ -103,13 +247,25 @@ class ParticleGame:
                 
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 1:  # Left click
-                    if self._handle_sidebar_click(event.pos):
+                    mx, my = event.pos
+                    # UI clicks first
+                    if self.ui_flask_rect.collidepoint(mx, my):
+                        self.ui_show_spawn = not self.ui_show_spawn
+                        continue
+                    if self.ui_show_spawn and self.ui_menu_rect.collidepoint(mx, my):
+                        # Handle clicks on any tile
+                        for key, rect in getattr(self, 'ui_tile_rects', {}).items():
+                            if rect.collidepoint(mx, my):
+                                # Only allow known tools
+                                if key in ("sand", "water", "lava", "npc"):
+                                    self.current_tool = key
+                                break
                         continue
                     # If NPC tool active, start dragging nearest body part in game area
                     if self.current_tool == "npc":
-                        mx, my = event.pos
                         if mx >= self.sidebar_width:
-                            gx, gy = mx - self.sidebar_width, my
+                            vx = mx - self.sidebar_width
+                            gx, gy = self.camera.view_to_world(vx, my)
                             # Spawn on first click if NPC doesn't exist
                             if self.npc is None:
                                 self.npc = NPC(gx, gy)
@@ -122,6 +278,11 @@ class ParticleGame:
                                 self.is_drawing = True
                     else:
                         self.is_drawing = True
+                elif event.button == 3:  # Right click starts panning
+                    mx, my = event.pos
+                    if not (self.ui_flask_rect.collidepoint(mx, my) or (self.ui_show_spawn and self.ui_menu_rect.collidepoint(mx, my))):
+                        self._pan_active = True
+                        self._pan_prev = (mx, my)
                     
             elif event.type == pygame.MOUSEBUTTONUP:
                 if event.button == 1:
@@ -130,10 +291,34 @@ class ParticleGame:
                         self.npc_drag_index = None
                         if self.npc:
                             self.npc.set_user_dragging(False)
+                elif event.button == 3:
+                    self._pan_active = False
+                    self._pan_prev = None
+
+            elif event.type == pygame.MOUSEMOTION:
+                if self._pan_active and self._pan_prev is not None:
+                    mx, my = event.pos
+                    pmx, pmy = self._pan_prev
+                    dx = mx - pmx
+                    dy = my - pmy
+                    # Pan opposite to drag for natural feel
+                    self.camera.pan_by(-dx, -dy)
+                    self._pan_prev = (mx, my)
                     
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     return False
+                # Zoom controls when holding CTRL
+                mods = pygame.key.get_mods()
+                if mods & pygame.KMOD_CTRL:
+                    mx, my = pygame.mouse.get_pos()
+                    if mx >= self.sidebar_width:
+                        vx = mx - self.sidebar_width
+                        # Plus (main) or equals (often shift+'+') or keypad plus
+                        if event.key in (getattr(pygame, 'K_PLUS', pygame.K_EQUALS), pygame.K_EQUALS, pygame.K_KP_PLUS):
+                            self.camera.zoom_at(1.1, vx, my)
+                        elif event.key in (pygame.K_MINUS, pygame.K_KP_MINUS):
+                            self.camera.zoom_at(1.0/1.1, vx, my)
                 elif event.key == pygame.K_UP:
                     self.brush_size = min(20, self.brush_size + 1)
                 elif event.key == pygame.K_DOWN:
@@ -193,10 +378,8 @@ class ParticleGame:
         # Update sizes
         self.width = int(max(400, new_w))
         self.height = int(max(300, new_h))
-        self.sidebar_width = self._compute_sidebar_width(self.width)
-        self.game_width = self.width - self.sidebar_width
-        # Relayout UI
-        self._layout_ui()
+        self.sidebar_width = 0
+        self.game_width = self.width
         # Update systems' bounds
         self.sand_system.width = self.game_width
         self.sand_system.height = self.height
@@ -204,6 +387,12 @@ class ParticleGame:
         self.water_system.height = self.height
         self.lava_system.width = self.game_width
         self.lava_system.height = self.height
+        # Recompute overlay layout
+        if hasattr(self, '_layout_overlay_ui'):
+            self._layout_overlay_ui()
+        # Update camera bounds and view
+        if hasattr(self, 'camera') and self.camera:
+            self.camera.update_view(self.game_width, self.height, self.game_width, self.height)
         # Invalidate CPU game surface (recreated lazily)
         self._game_surface = None
         # Resize window for CPU path
@@ -241,12 +430,13 @@ class ParticleGame:
         
         mouse_x, mouse_y = pygame.mouse.get_pos()
         
-        # Don't draw in sidebar
-        if mouse_x < self.sidebar_width:
+        # Block drawing when cursor over overlay UI
+        if self.ui_flask_rect.collidepoint(mouse_x, mouse_y) or (self.ui_show_spawn and self.ui_menu_rect.collidepoint(mouse_x, mouse_y)):
             return
         
-        # Adjust coordinates to game space
-        game_x = mouse_x - self.sidebar_width
+        # Adjust coordinates to game view then world space (camera aware)
+        view_x = mouse_x - self.sidebar_width
+        game_x, game_y = self.camera.view_to_world(view_x, mouse_y)
         
         # enforce particle cap
         total = (
@@ -260,19 +450,19 @@ class ParticleGame:
                 return
 
         if self.current_tool == "sand":
-            self.sand_system.add_particle_cluster(game_x, mouse_y, self.brush_size)
+            self.sand_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
         elif self.current_tool == "water":
-            self.water_system.add_particle_cluster(game_x, mouse_y, self.brush_size)
+            self.water_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
         elif self.current_tool == "lava":
-            self.lava_system.add_particle_cluster(game_x, mouse_y, self.brush_size)
+            self.lava_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
         elif self.current_tool == "npc":
             # Drag current selected NPC particle to cursor
             if self.npc is not None and self.npc_drag_index is not None:
                 p = self.npc.particles[self.npc_drag_index]
-                p.pos[0] = game_x
-                p.pos[1] = mouse_y
-                p.prev[0] = game_x
-                p.prev[1] = mouse_y
+                p.pos[0] = float(game_x)
+                p.pos[1] = float(game_y)
+                p.prev[0] = float(game_x)
+                p.prev[1] = float(game_y)
     
     def _handle_cross_material_collisions(self):
         """Handle collisions between materials (sand, water, lava)."""
@@ -448,6 +638,10 @@ class ParticleGame:
         """
         # Mouse position
         mx, my = pygame.mouse.get_pos()
+        # Skip when hovering overlay UI
+        if self.ui_flask_rect.collidepoint(mx, my) or (self.ui_show_spawn and self.ui_menu_rect.collidepoint(mx, my)):
+            self._prev_mouse = (mx, my)
+            return
         # Update previous mouse storage
         if self._prev_mouse is None:
             self._prev_mouse = (mx, my)
@@ -458,14 +652,15 @@ class ParticleGame:
             self._prev_mouse = (mx, my)
             return
 
-        # Convert to game coords
-        gx = mx - self.sidebar_width
-        gy = my
+        # Convert to game view then to world coords (camera-aware)
+        gvx = mx - self.sidebar_width
+        gvy = my
+        gx, gy = self.camera.view_to_world(gvx, gvy)
 
-        # Movement delta
+        # Movement delta in world units (account for zoom)
         pmx, pmy = self._prev_mouse
-        dx = mx - pmx
-        dy = my - pmy
+        dx = (mx - pmx) / max(self.camera.scale, 1e-6)
+        dy = (my - pmy) / max(self.camera.scale, 1e-6)
         self._prev_mouse = (mx, my)
 
         # If barely moving, still allow a slight outward nudge
@@ -532,7 +727,8 @@ class ParticleGame:
         if self.npc is not None and self.current_tool == "npc" and self.is_drawing and self.npc_drag_index is not None:
             mx, my = pygame.mouse.get_pos()
             if mx >= self.sidebar_width:
-                gx, gy = mx - self.sidebar_width, my
+                vx = mx - self.sidebar_width
+                gx, gy = self.camera.view_to_world(vx, my)
                 p = self.npc.particles[self.npc_drag_index]
                 p.pos[0] = gx
                 p.pos[1] = gy
@@ -657,10 +853,23 @@ class ParticleGame:
                 # Draw NPC if present
                 if self.npc is not None:
                     self.npc.draw(game_surface)
-                # Blit game area
-                self.screen.blit(game_surface, (self.sidebar_width, 0))
-                # Sidebar and HUD
-                self.draw_sidebar()
+                if getattr(self, 'camera', None) and not self.camera.is_identity():
+                    # Crop and scale according to camera
+                    vw = self.game_width
+                    vh = self.height
+                    src_w = max(1, int(vw / self.camera.scale))
+                    src_h = max(1, int(vh / self.camera.scale))
+                    src_x = max(0, min(int(self.camera.off_x), self.game_width - src_w))
+                    src_y = max(0, min(int(self.camera.off_y), self.height - src_h))
+                    src_rect = pygame.Rect(src_x, src_y, src_w, src_h)
+                    sub = game_surface.subsurface(src_rect).copy()
+                    scaled = pygame.transform.smoothscale(sub, (vw, vh))
+                    self.screen.blit(scaled, (self.sidebar_width, 0))
+                else:
+                    # Blit full game area
+                    self.screen.blit(game_surface, (self.sidebar_width, 0))
+                # Overlay UI
+                self._draw_overlays_cpu()
                 # Throttle stats update
                 now = time.time()
                 if now - self._stats_updated_at > 0.25:
@@ -687,41 +896,62 @@ class ParticleGame:
         # Game area background
         self.renderer.draw_color = (30, 30, 30, 255)
         self.renderer.fill_rect(sdl2rect.Rect(self.sidebar_width, 0, self.game_width, self.height))
-
-        # Draw particles via batched point rendering
-        # Sand: grouped by color
-        sand_groups = self.sand_system.get_point_groups()
-        for color, pts in sand_groups.items():
-            if not pts:
-                continue
-            # Add sidebar offset
-            pts_offset = [(x + self.sidebar_width, y) for (x, y) in pts]
-            self.renderer.draw_color = (color[0], color[1], color[2], 255)
-            self.renderer.draw_points(pts_offset)
-
-        # Water: single color
-        w_color, w_points = self.water_system.get_point_groups()
-        if w_points:
-            w_pts_offset = [(x + self.sidebar_width, y) for (x, y) in w_points]
-            self.renderer.draw_color = (w_color[0], w_color[1], w_color[2], 255)
-            self.renderer.draw_points(w_pts_offset)
-
-        # Lava: single color
-        l_color, l_points = self.lava_system.get_point_groups()
-        if l_points:
-            l_pts_offset = [(x + self.sidebar_width, y) for (x, y) in l_points]
-            self.renderer.draw_color = (l_color[0], l_color[1], l_color[2], 255)
-            self.renderer.draw_points(l_pts_offset)
-
-        # NPC: draw via CPU surface turned into texture (only if present)
-        if self.npc is not None:
+        use_cpu_composite = getattr(self, 'camera', None) and not self.camera.is_identity()
+        if use_cpu_composite:
+            # Composite to CPU surface, then crop/scale and upload as texture
             cpu_layer = pygame.Surface((self.game_width, self.height), pygame.SRCALPHA)
-            self.npc.draw(cpu_layer)
-            npc_tex = Texture.from_surface(self.renderer, cpu_layer)
-            self.renderer.copy(npc_tex, dstrect=sdl2rect.Rect(self.sidebar_width, 0, self.game_width, self.height))
+            cpu_layer.fill((20, 20, 20, 255))
+            self.sand_system.draw(cpu_layer)
+            self.water_system.draw(cpu_layer)
+            self.lava_system.draw(cpu_layer)
+            if self.npc is not None:
+                self.npc.draw(cpu_layer)
+            vw = self.game_width
+            vh = self.height
+            src_w = max(1, int(vw / self.camera.scale))
+            src_h = max(1, int(vh / self.camera.scale))
+            src_x = max(0, min(int(self.camera.off_x), self.game_width - src_w))
+            src_y = max(0, min(int(self.camera.off_y), self.height - src_h))
+            src_rect = pygame.Rect(src_x, src_y, src_w, src_h)
+            sub = cpu_layer.subsurface(src_rect).copy()
+            scaled = pygame.transform.smoothscale(sub, (vw, vh))
+            tex = Texture.from_surface(self.renderer, scaled)
+            self.renderer.copy(tex, dstrect=sdl2rect.Rect(self.sidebar_width, 0, self.game_width, self.height))
+        else:
+            # Draw particles via batched point rendering
+            # Sand: grouped by color
+            sand_groups = self.sand_system.get_point_groups()
+            for color, pts in sand_groups.items():
+                if not pts:
+                    continue
+                # Add sidebar offset
+                pts_offset = [(x + self.sidebar_width, y) for (x, y) in pts]
+                self.renderer.draw_color = (color[0], color[1], color[2], 255)
+                self.renderer.draw_points(pts_offset)
 
-        # Sidebar and HUD
-        self.draw_sidebar()
+            # Water: single color
+            w_color, w_points = self.water_system.get_point_groups()
+            if w_points:
+                w_pts_offset = [(x + self.sidebar_width, y) for (x, y) in w_points]
+                self.renderer.draw_color = (w_color[0], w_color[1], w_color[2], 255)
+                self.renderer.draw_points(w_pts_offset)
+
+            # Lava: single color
+            l_color, l_points = self.lava_system.get_point_groups()
+            if l_points:
+                l_pts_offset = [(x + self.sidebar_width, y) for (x, y) in l_points]
+                self.renderer.draw_color = (l_color[0], l_color[1], l_color[2], 255)
+                self.renderer.draw_points(l_pts_offset)
+
+            # NPC: draw via CPU surface turned into texture (only if present)
+            if self.npc is not None:
+                cpu_layer = pygame.Surface((self.game_width, self.height), pygame.SRCALPHA)
+                self.npc.draw(cpu_layer)
+                npc_tex = Texture.from_surface(self.renderer, cpu_layer)
+                self.renderer.copy(npc_tex, dstrect=sdl2rect.Rect(self.sidebar_width, 0, self.game_width, self.height))
+
+        # Overlay UI
+        self._draw_overlays_gpu()
 
         # Stats text (throttled)
         now = time.time()
@@ -747,6 +977,233 @@ class ParticleGame:
             self.renderer.draw_rect(outline)
 
         self.renderer.present()
+
+    def _ensure_ui_textures(self):
+        if not getattr(self, 'use_gpu', False):
+            return
+        if not hasattr(self, 'renderer'):
+            return
+        if self._ui_flask_tex is None and hasattr(self, 'ui_flask_surf'):
+            try:
+                self._ui_flask_tex = Texture.from_surface(self.renderer, self.ui_flask_surf)
+            except Exception:
+                self._ui_flask_tex = None
+        if self._ui_water_tex is None and hasattr(self, 'ui_water_surf'):
+            try:
+                self._ui_water_tex = Texture.from_surface(self.renderer, self.ui_water_surf)
+            except Exception:
+                self._ui_water_tex = None
+        if self._ui_sand_tex is None and hasattr(self, 'ui_sand_surf'):
+            try:
+                self._ui_sand_tex = Texture.from_surface(self.renderer, self.ui_sand_surf)
+            except Exception:
+                self._ui_sand_tex = None
+        if self._ui_lava_tex is None and hasattr(self, 'ui_lava_surf'):
+            try:
+                self._ui_lava_tex = Texture.from_surface(self.renderer, self.ui_lava_surf)
+            except Exception:
+                self._ui_lava_tex = None
+        if self._ui_npc_tex is None and hasattr(self, 'ui_npc_surf'):
+            try:
+                self._ui_npc_tex = Texture.from_surface(self.renderer, self.ui_npc_surf)
+            except Exception:
+                self._ui_npc_tex = None
+
+    def _draw_overlays_cpu(self):
+        # Icon button: 50% transparent black box with icon image
+        overlay = pygame.Surface(self.ui_flask_rect.size, pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 128))  # 50% black
+        self.screen.blit(overlay, self.ui_flask_rect.topleft)
+        # Border for icon box for a cleaner look
+        pygame.draw.rect(self.screen, (90, 90, 90), self.ui_flask_rect, 1)
+        # Draw image centered and scaled to fit with padding
+        pad = 6
+        dest_w = max(1, self.ui_flask_rect.w - 2 * pad)
+        dest_h = max(1, self.ui_flask_rect.h - 2 * pad)
+        if self.ui_flask_surf:
+            iw, ih = self.ui_flask_surf.get_size()
+            scale = min(dest_w / iw, dest_h / ih)
+            scaled = pygame.transform.smoothscale(self.ui_flask_surf, (int(iw * scale), int(ih * scale)))
+            dx = self.ui_flask_rect.x + (self.ui_flask_rect.w - scaled.get_width()) // 2
+            dy = self.ui_flask_rect.y + (self.ui_flask_rect.h - scaled.get_height()) // 2
+            self.screen.blit(scaled, (dx, dy))
+
+        # Spawn menu if visible: larger, styled panel with header and shadow
+        if self.ui_show_spawn:
+            mw, mh = self.ui_menu_rect.size
+            header_h = getattr(self, 'ui_header_h', 36)
+            # Drop shadow
+            shadow = pygame.Surface((mw, mh), pygame.SRCALPHA)
+            pygame.draw.rect(shadow, (0, 0, 0, 100), pygame.Rect(0, 0, mw, mh), border_radius=10)
+            self.screen.blit(shadow, (self.ui_menu_rect.x + 3, self.ui_menu_rect.y + 4))
+
+            # Panel with rounded corners
+            panel = pygame.Surface((mw, mh), pygame.SRCALPHA)
+            pygame.draw.rect(panel, (0, 0, 0, 180), pygame.Rect(0, 0, mw, mh), border_radius=10)
+            # Header bar
+            pygame.draw.rect(panel, (12, 12, 12, 210), pygame.Rect(0, 0, mw, header_h), border_radius=10)
+            # Panel border and inner highlight
+            pygame.draw.rect(panel, (100, 100, 100, 220), pygame.Rect(0, 0, mw, mh), width=1, border_radius=10)
+            pygame.draw.rect(panel, (255, 255, 255, 25), pygame.Rect(1, 1, mw - 2, mh - 2), width=1, border_radius=9)
+            # Blit panel
+            self.screen.blit(panel, self.ui_menu_rect.topleft)
+            # Title centered in header
+            title_text = self.button_font.render("SPAWN", True, (220, 220, 220))
+            ty = self.ui_menu_rect.y + (header_h - title_text.get_height()) // 2
+            self.screen.blit(title_text, (self.ui_menu_rect.x + 12, ty))
+
+            # Tiles
+            mx, my = pygame.mouse.get_pos()
+            for tile in getattr(self, 'ui_tiles', []):
+                rect = self.ui_tile_rects.get(tile["key"]) if hasattr(self, 'ui_tile_rects') else None
+                if not rect:
+                    continue
+                hovered = rect.collidepoint(mx, my)
+                tile_bg = pygame.Surface(rect.size, pygame.SRCALPHA)
+                base_alpha = 205 if hovered else 190
+                pygame.draw.rect(tile_bg, (25, 25, 25, base_alpha), pygame.Rect(0, 0, rect.w, rect.h), border_radius=8)
+                self.screen.blit(tile_bg, rect.topleft)
+                # Border and hover
+                border_col = (120, 120, 120) if not hovered else (170, 170, 170)
+                pygame.draw.rect(self.screen, border_col, rect, 1, border_radius=8)
+                # Image or placeholder
+                surf = tile.get("surf")
+                if surf:
+                    iw, ih = surf.get_size()
+                    pad = 8
+                    dw = max(1, rect.w - 2 * pad)
+                    dh = max(1, rect.h - 2 * pad)
+                    scale = min(dw / iw, dh / ih)
+                    img = pygame.transform.smoothscale(surf, (int(iw * scale), int(ih * scale)))
+                    dx = rect.x + (rect.w - img.get_width()) // 2
+                    dy = rect.y + (rect.h - img.get_height()) // 2
+                    self.screen.blit(img, (dx, dy))
+                else:
+                    # Colored placeholder
+                    ph = pygame.Surface((rect.w - 16, rect.h - 24), pygame.SRCALPHA)
+                    ph.fill((*tile.get("color", (120, 120, 120)), 220))
+                    px = rect.x + (rect.w - ph.get_width()) // 2
+                    py = rect.y + (rect.h - ph.get_height()) // 2
+                    self.screen.blit(ph, (px, py))
+                # Selection border if selected
+                if self.current_tool == tile["key"]:
+                    pygame.draw.rect(self.screen, (100, 160, 255), rect, 2, border_radius=8)
+                # Label under tile
+                label_surf = self.button_font.render(tile["label"], True, (200, 200, 200))
+                lx = rect.x + (rect.w - label_surf.get_width()) // 2
+                ly = rect.bottom + 6
+                self.screen.blit(label_surf, (lx, ly))
+
+    def _draw_overlays_gpu(self):
+        self._ensure_ui_textures()
+        # Icon button box
+        self.renderer.draw_color = (0, 0, 0, 128)
+        self.renderer.fill_rect(sdl2rect.Rect(self.ui_flask_rect.x, self.ui_flask_rect.y, self.ui_flask_rect.w, self.ui_flask_rect.h))
+        # Border for icon box
+        self.renderer.draw_color = (90, 90, 90, 255)
+        self.renderer.draw_rect(sdl2rect.Rect(self.ui_flask_rect.x, self.ui_flask_rect.y, self.ui_flask_rect.w, self.ui_flask_rect.h))
+        # Icon image sizing and copy
+        iw, ih = (0, 0)
+        if self.ui_flask_surf:
+            iw, ih = self.ui_flask_surf.get_size()
+        pad = 6
+        dest_w = max(1, self.ui_flask_rect.w - 2 * pad)
+        dest_h = max(1, self.ui_flask_rect.h - 2 * pad)
+        scale = min(dest_w / (iw or 1), dest_h / (ih or 1))
+        w = int((iw or 1) * scale)
+        h = int((ih or 1) * scale)
+        dx = self.ui_flask_rect.x + (self.ui_flask_rect.w - w) // 2
+        dy = self.ui_flask_rect.y + (self.ui_flask_rect.h - h) // 2
+        if self._ui_flask_tex:
+            self.renderer.copy(self._ui_flask_tex, dstrect=sdl2rect.Rect(dx, dy, w, h))
+        else:
+            try:
+                tmp_tex = Texture.from_surface(self.renderer, self.ui_flask_surf)
+                self.renderer.copy(tmp_tex, dstrect=sdl2rect.Rect(dx, dy, w, h))
+            except Exception:
+                pass
+
+        if self.ui_show_spawn:
+            header_h = getattr(self, 'ui_header_h', 36)
+            # Shadow behind panel
+            self.renderer.draw_color = (0, 0, 0, 100)
+            self.renderer.fill_rect(sdl2rect.Rect(self.ui_menu_rect.x + 3, self.ui_menu_rect.y + 4, self.ui_menu_rect.w, self.ui_menu_rect.h))
+            # Panel
+            self.renderer.draw_color = (0, 0, 0, 180)
+            self.renderer.fill_rect(sdl2rect.Rect(self.ui_menu_rect.x, self.ui_menu_rect.y, self.ui_menu_rect.w, self.ui_menu_rect.h))
+            # Header bar
+            self.renderer.draw_color = (12, 12, 12, 210)
+            self.renderer.fill_rect(sdl2rect.Rect(self.ui_menu_rect.x, self.ui_menu_rect.y, self.ui_menu_rect.w, header_h))
+            # Panel border
+            self.renderer.draw_color = (100, 100, 100, 255)
+            self.renderer.draw_rect(sdl2rect.Rect(self.ui_menu_rect.x, self.ui_menu_rect.y, self.ui_menu_rect.w, self.ui_menu_rect.h))
+            # Title centered in header
+            title = "SPAWN"
+            title_tex = self._get_text_texture(title, (220, 220, 220))
+            title_surf = self.button_font.render(title, True, (220, 220, 220))
+            ty = self.ui_menu_rect.y + (header_h - title_surf.get_height()) // 2
+            self.renderer.copy(title_tex, dstrect=sdl2rect.Rect(self.ui_menu_rect.x + 12, ty, title_surf.get_width(), title_surf.get_height()))
+
+            # Tiles (water uses texture if available, others are colored rects with label)
+            mx, my = pygame.mouse.get_pos()
+            for tile in getattr(self, 'ui_tiles', []):
+                rect = self.ui_tile_rects.get(tile["key"]) if hasattr(self, 'ui_tile_rects') else None
+                if not rect:
+                    continue
+                hovered = rect.collidepoint(mx, my)
+                alpha = 200 if hovered else 180
+                self.renderer.draw_color = (25, 25, 25, alpha)
+                self.renderer.fill_rect(sdl2rect.Rect(rect.x, rect.y, rect.w, rect.h))
+                border_col = (120, 120, 120, 255) if not hovered else (170, 170, 170, 255)
+                self.renderer.draw_color = border_col
+                self.renderer.draw_rect(sdl2rect.Rect(rect.x, rect.y, rect.w, rect.h))
+
+                surf = tile.get("surf")
+                if surf is not None and tile["key"] in ("water", "sand", "lava", "npc"):
+                    iw, ih = surf.get_size()
+                    pad = 8
+                    dest_w = max(1, rect.w - 2 * pad)
+                    dest_h = max(1, rect.h - 2 * pad)
+                    scale = min(dest_w / (iw or 1), dest_h / (ih or 1))
+                    w = int((iw or 1) * scale)
+                    h = int((ih or 1) * scale)
+                    dx = rect.x + (rect.w - w) // 2
+                    dy = rect.y + (rect.h - h) // 2
+                    # Use cached texture per known tile
+                    tex = None
+                    if tile["key"] == "water":
+                        tex = self._ui_water_tex
+                    elif tile["key"] == "sand":
+                        tex = self._ui_sand_tex
+                    elif tile["key"] == "lava":
+                        tex = self._ui_lava_tex
+                    elif tile["key"] == "npc":
+                        tex = self._ui_npc_tex
+                    if tex:
+                        self.renderer.copy(tex, dstrect=sdl2rect.Rect(dx, dy, w, h))
+                    else:
+                        try:
+                            tmp_tex = Texture.from_surface(self.renderer, surf)
+                            self.renderer.copy(tmp_tex, dstrect=sdl2rect.Rect(dx, dy, w, h))
+                        except Exception:
+                            pass
+                else:
+                    # Colored placeholder rectangle
+                    self.renderer.draw_color = (tile.get("color", (120, 120, 120))[0], tile.get("color", (120, 120, 120))[1], tile.get("color", (120, 120, 120))[2], 220)
+                    inset = 8
+                    self.renderer.fill_rect(sdl2rect.Rect(rect.x + inset, rect.y + inset, max(0, rect.w - 2 * inset), max(0, rect.h - 2 * inset)))
+
+                # Selection border
+                if self.current_tool == tile["key"]:
+                    self.renderer.draw_color = (100, 160, 255, 255)
+                    self.renderer.draw_rect(sdl2rect.Rect(rect.x, rect.y, rect.w, rect.h))
+                # Label
+                lbl = tile["label"]
+                label_tex = self._get_text_texture(lbl, (200, 200, 200))
+                label_surf = self.button_font.render(lbl, True, (200, 200, 200))
+                lx = rect.x + (rect.w - label_surf.get_width()) // 2
+                ly = rect.bottom + 6
+                self.renderer.copy(label_tex, dstrect=sdl2rect.Rect(lx, ly, label_surf.get_width(), label_surf.get_height()))
     
     def run(self):
         """Main game loop"""

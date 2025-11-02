@@ -179,6 +179,12 @@ class WaterSystem:
     def get_particle_count(self) -> int:
         """Return number of particles"""
         return len(self.particles)
+
+    def sweep_dead(self):
+        """Remove particles marked with attribute dead=True (for cross-material effects)."""
+        if not self.particles:
+            return
+        self.particles = [p for p in self.particles if not getattr(p, "dead", False)]
     
     def get_particles_at(self, x: float, y: float, radius: float = 5) -> List[WaterParticle]:
         """Get particles within a radius of a position"""
