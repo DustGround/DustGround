@@ -5,6 +5,7 @@ import time
 from typing import Tuple, Dict, List, Tuple as Tup
 from src.sand import SandSystem, SandParticle
 from src.water import WaterSystem, WaterParticle
+from src.lava import LavaSystem, LavaParticle
 from src.npc import NPC
 from src.opt import get_or_create_optimizations
 from src.scaling import recommend_settings
@@ -55,6 +56,7 @@ class ParticleGame:
         # Particle systems
         self.sand_system = SandSystem(self.game_width, height)
         self.water_system = WaterSystem(self.game_width, height)
+        self.lava_system = LavaSystem(self.game_width, height)
         
         # Current tool selection
         self.current_tool = "sand"  # "sand" or "water"
@@ -153,6 +155,9 @@ class ParticleGame:
         elif self.buttons["water"].collidepoint(pos):
             self.current_tool = "water"
             return True
+        elif self.buttons.get("lava") and self.buttons["lava"].collidepoint(pos):
+            self.current_tool = "lava"
+            return True
         elif self.buttons.get("npc") and self.buttons["npc"].collidepoint(pos):
             self.current_tool = "npc"
             return True
@@ -175,11 +180,13 @@ class ParticleGame:
         margin = 10
         bw = max(100, self.sidebar_width - margin * 2)
         bh = 40
+        y = 20
         self.buttons = {
-            "sand": pygame.Rect(margin, 20, bw, bh),
-            "water": pygame.Rect(margin, 70, bw, bh),
-            "npc": pygame.Rect(margin, 120, bw, bh),
-            "clear": pygame.Rect(margin, 170, bw, bh),
+            "sand": pygame.Rect(margin, y, bw, bh),
+            "water": pygame.Rect(margin, y + 50, bw, bh),
+            "lava": pygame.Rect(margin, y + 100, bw, bh),
+            "npc": pygame.Rect(margin, y + 150, bw, bh),
+            "clear": pygame.Rect(margin, y + 200, bw, bh),
         }
 
     def _apply_resize(self, new_w: int, new_h: int):
@@ -195,6 +202,8 @@ class ParticleGame:
         self.sand_system.height = self.height
         self.water_system.width = self.game_width
         self.water_system.height = self.height
+        self.lava_system.width = self.game_width
+        self.lava_system.height = self.height
         # Invalidate CPU game surface (recreated lazily)
         self._game_surface = None
         # Resize window for CPU path
@@ -240,7 +249,11 @@ class ParticleGame:
         game_x = mouse_x - self.sidebar_width
         
         # enforce particle cap
-        total = self.sand_system.get_particle_count() + self.water_system.get_particle_count()
+        total = (
+            self.sand_system.get_particle_count()
+            + self.water_system.get_particle_count()
+            + self.lava_system.get_particle_count()
+        )
         if total >= self.max_particles:
             # Still allow NPC dragging when at cap
             if self.current_tool != "npc":
@@ -250,6 +263,8 @@ class ParticleGame:
             self.sand_system.add_particle_cluster(game_x, mouse_y, self.brush_size)
         elif self.current_tool == "water":
             self.water_system.add_particle_cluster(game_x, mouse_y, self.brush_size)
+        elif self.current_tool == "lava":
+            self.lava_system.add_particle_cluster(game_x, mouse_y, self.brush_size)
         elif self.current_tool == "npc":
             # Drag current selected NPC particle to cursor
             if self.npc is not None and self.npc_drag_index is not None:
@@ -260,10 +275,10 @@ class ParticleGame:
                 p.prev[1] = mouse_y
     
     def _handle_cross_material_collisions(self):
-        """Handle collisions between sand and water particles"""
+        """Handle collisions between materials (sand, water, lava)."""
         # Grids were rebuilt during each system update; avoid extra rebuild here
-        # Check each water particle against sand particles
         MAX_NEIGHBORS = 12
+        # Water vs Sand: wet sand and exchange momentum
         for water in self.water_system.particles:
             sand_neighbors = self._get_nearby_sand(water.x, water.y, radius=2)
             if len(sand_neighbors) > MAX_NEIGHBORS:
@@ -288,6 +303,53 @@ class ParticleGame:
                     # Sand creates drag on water
                     water.vx -= nx * 0.1
                     water.vy -= ny * 0.1
+
+        # Lava interactions: lava destroys nearby sand/water
+        # Build removal sets and sweep afterwards
+        sand_kill = set()
+        water_kill = set()
+        for lava in self.lava_system.particles:
+            # Against sand
+            sands = self._get_nearby_sand(lava.x, lava.y, radius=2)
+            if len(sands) > MAX_NEIGHBORS:
+                sands = sands[:MAX_NEIGHBORS]
+            for s in sands:
+                dx = s.x - lava.x
+                dy = s.y - lava.y
+                d2 = dx*dx + dy*dy
+                if 0.01 < d2 < 2.5*2.5:
+                    sand_kill.add(id(s))
+                    # small reaction to lava
+                    d = d2 ** 0.5
+                    nx, ny = dx/d, dy/d
+                    lava.vx -= nx * 0.05
+                    lava.vy -= ny * 0.05
+            # Against water
+            waters = self._get_nearby_water(lava.x, lava.y, radius=2)
+            if len(waters) > MAX_NEIGHBORS:
+                waters = waters[:MAX_NEIGHBORS]
+            for w in waters:
+                dx = w.x - lava.x
+                dy = w.y - lava.y
+                d2 = dx*dx + dy*dy
+                if 0.01 < d2 < 2.5*2.5:
+                    water_kill.add(id(w))
+                    d = d2 ** 0.5
+                    nx, ny = dx/d, dy/d
+                    lava.vx -= nx * 0.03
+                    lava.vy -= ny * 0.03
+
+        # Sweep dead sand/water
+        if sand_kill:
+            for p in self.sand_system.particles:
+                if id(p) in sand_kill:
+                    setattr(p, 'dead', True)
+            self.sand_system.sweep_dead()
+        if water_kill:
+            for p in self.water_system.particles:
+                if id(p) in water_kill:
+                    setattr(p, 'dead', True)
+            self.water_system.sweep_dead()
     
     def _get_nearby_sand(self, x: float, y: float, radius: int = 2) -> list:
         """Get sand particles near a position"""
@@ -312,6 +374,18 @@ class ParticleGame:
                 cell = (cell_x + dx, cell_y + dy)
                 if cell in self.water_system.grid:
                     nearby.extend(self.water_system.grid[cell])
+        return nearby
+
+    def _get_nearby_lava(self, x: float, y: float, radius: int = 2) -> list:
+        """Get lava particles near a position"""
+        cell_x, cell_y = int(x // self.lava_system.cell_size), int(y // self.lava_system.cell_size)
+        nearby = []
+
+        for dx in range(-radius, radius + 1):
+            for dy in range(-radius, radius + 1):
+                cell = (cell_x + dx, cell_y + dy)
+                if cell in self.lava_system.grid:
+                    nearby.extend(self.lava_system.grid[cell])
         return nearby
 
     def _npc_particle_coupling(self):
@@ -466,7 +540,11 @@ class ParticleGame:
                 p.prev[1] = gy
 
         # Adaptive scaling every 15 frames
-        total = self.sand_system.get_particle_count() + self.water_system.get_particle_count()
+        total = (
+            self.sand_system.get_particle_count()
+            + self.water_system.get_particle_count()
+            + self.lava_system.get_particle_count()
+        )
         if (self._frame_index - self._last_scale_apply) >= 15:
             # Use smoothed FPS
             settings = recommend_settings(total, self._fps_avg or self.fps, self.target_fps, self.use_gpu)
@@ -478,11 +556,16 @@ class ParticleGame:
             self.water_system.neighbor_radius = w["neighbor_radius"]
             self.water_system.max_neighbors = w["max_neighbors"]
             self.water_system.skip_mod = w["skip_mod"]
+            # Lava uses water-like settings (similar fluid budget)
+            self.lava_system.neighbor_radius = w["neighbor_radius"]
+            self.lava_system.max_neighbors = w["max_neighbors"]
+            self.lava_system.skip_mod = w["skip_mod"]
             self._last_scale_apply = self._frame_index
 
         # Update particle systems (pass frame index for collision skipping)
         self.sand_system.update(self._frame_index)
         self.water_system.update(self._frame_index)
+        self.lava_system.update(self._frame_index)
         # Update NPC physics
         dt = 1.0 / max(self.target_fps, 1)
         if self.npc is not None:
@@ -570,6 +653,7 @@ class ParticleGame:
                 # Draw particles (CPU path)
                 self.sand_system.draw(game_surface)
                 self.water_system.draw(game_surface)
+                self.lava_system.draw(game_surface)
                 # Draw NPC if present
                 if self.npc is not None:
                     self.npc.draw(game_surface)
@@ -581,11 +665,12 @@ class ParticleGame:
                 now = time.time()
                 if now - self._stats_updated_at > 0.25:
                     self._stats_updated_at = now
-                    self._stats_cache_surf = self.font.render(
-                        f"Sand: {self.sand_system.get_particle_count()} | Water: {self.water_system.get_particle_count()} | FPS: {self.fps}",
-                        True,
-                        (200, 200, 200)
+                    stats = (
+                        f"Sand: {self.sand_system.get_particle_count()} | "
+                        f"Water: {self.water_system.get_particle_count()} | "
+                        f"Lava: {self.lava_system.get_particle_count()} | FPS: {self.fps}"
                     )
+                    self._stats_cache_surf = self.font.render(stats, True, (200, 200, 200))
                 if self._stats_cache_surf:
                     self.screen.blit(self._stats_cache_surf, (self.sidebar_width + 10, self.height - 25))
                 # Cursor indicator
@@ -621,6 +706,13 @@ class ParticleGame:
             self.renderer.draw_color = (w_color[0], w_color[1], w_color[2], 255)
             self.renderer.draw_points(w_pts_offset)
 
+        # Lava: single color
+        l_color, l_points = self.lava_system.get_point_groups()
+        if l_points:
+            l_pts_offset = [(x + self.sidebar_width, y) for (x, y) in l_points]
+            self.renderer.draw_color = (l_color[0], l_color[1], l_color[2], 255)
+            self.renderer.draw_points(l_pts_offset)
+
         # NPC: draw via CPU surface turned into texture (only if present)
         if self.npc is not None:
             cpu_layer = pygame.Surface((self.game_width, self.height), pygame.SRCALPHA)
@@ -635,7 +727,11 @@ class ParticleGame:
         now = time.time()
         if (self._stats_cache_tex is None) or (now - self._stats_updated_at > 0.25):
             self._stats_updated_at = now
-            stats = f"Sand: {self.sand_system.get_particle_count()} | Water: {self.water_system.get_particle_count()} | FPS: {self.fps}"
+            stats = (
+                f"Sand: {self.sand_system.get_particle_count()} | "
+                f"Water: {self.water_system.get_particle_count()} | "
+                f"Lava: {self.lava_system.get_particle_count()} | FPS: {self.fps}"
+            )
             stats_surf = self.font.render(stats, True, (200, 200, 200))
             self._stats_cache_tex = Texture.from_surface(self.renderer, stats_surf)
             self._stats_cache_surf = stats_surf
