@@ -7,6 +7,8 @@ from typing import Tuple, Dict, List, Tuple as Tup
 from src.sand import SandSystem, SandParticle
 from src.water import WaterSystem, WaterParticle
 from src.lava import LavaSystem, LavaParticle
+from src.toxic import ToxicSystem
+from src.blood import BloodSystem
 from src.npc import NPC
 from src.opt import get_or_create_optimizations
 from src.scaling import recommend_settings
@@ -60,6 +62,8 @@ class ParticleGame:
         self.sand_system = SandSystem(self.game_width, height)
         self.water_system = WaterSystem(self.game_width, height)
         self.lava_system = LavaSystem(self.game_width, height)
+        self.toxic_system = ToxicSystem(self.game_width, height)
+        self.blood_system = BloodSystem(self.game_width, height)
         # Camera for pan/zoom inside game area
         self.camera = Camera(world_w=self.game_width, world_h=self.height, view_w=self.game_width, view_h=self.height)
         
@@ -103,11 +107,17 @@ class ParticleGame:
         if not self.ui_npc_surf:
             self.ui_npc_surf = pygame.Surface((64, 64), pygame.SRCALPHA)
             self.ui_npc_surf.fill((180, 180, 200, 255))
+        # Toxic waste icon
+        self.ui_toxic_surf = self._load_image("src/assets/ToxicWaste.png")
+        if not self.ui_toxic_surf:
+            self.ui_toxic_surf = pygame.Surface((64, 64), pygame.SRCALPHA)
+            self.ui_toxic_surf.fill((90, 220, 90, 255))
         self._ui_flask_tex = None
         self._ui_water_tex = None
         self._ui_sand_tex = None
         self._ui_lava_tex = None
         self._ui_npc_tex = None
+        self._ui_toxic_tex = None
 
         # Spawn menu tiles definition (order matters)
         # For now we have an image only for water; others will render as colored tiles with labels
@@ -115,9 +125,12 @@ class ParticleGame:
             {"key": "sand", "label": "SAND", "color": (200, 180, 120), "surf": self.ui_sand_surf},
             {"key": "water", "label": "WATER", "color": (80, 140, 255), "surf": self.ui_water_surf},
             {"key": "lava", "label": "LAVA", "color": (255, 120, 60), "surf": self.ui_lava_surf},
+            {"key": "toxic", "label": "TOXIC", "color": (90, 220, 90), "surf": self.ui_toxic_surf},
             {"key": "npc", "label": "NPC", "color": (180, 180, 200), "surf": self.ui_npc_surf},
         ]
         self.ui_tile_rects = {}
+        # Keep a single horizontal row across all tiles
+        self.ui_grid_cols = len(self.ui_tiles)
         # Recompute layout now that tiles are defined
         self._layout_overlay_ui()
         
@@ -257,7 +270,7 @@ class ParticleGame:
                         for key, rect in getattr(self, 'ui_tile_rects', {}).items():
                             if rect.collidepoint(mx, my):
                                 # Only allow known tools
-                                if key in ("sand", "water", "lava", "npc"):
+                                if key in ("sand", "water", "lava", "toxic", "npc"):
                                     self.current_tool = key
                                 break
                         continue
@@ -387,6 +400,12 @@ class ParticleGame:
         self.water_system.height = self.height
         self.lava_system.width = self.game_width
         self.lava_system.height = self.height
+        if hasattr(self, 'toxic_system'):
+            self.toxic_system.width = self.game_width
+            self.toxic_system.height = self.height
+        if hasattr(self, 'blood_system'):
+            self.blood_system.width = self.game_width
+            self.blood_system.height = self.height
         # Recompute overlay layout
         if hasattr(self, '_layout_overlay_ui'):
             self._layout_overlay_ui()
@@ -443,6 +462,7 @@ class ParticleGame:
             self.sand_system.get_particle_count()
             + self.water_system.get_particle_count()
             + self.lava_system.get_particle_count()
+            + self.toxic_system.get_particle_count()
         )
         if total >= self.max_particles:
             # Still allow NPC dragging when at cap
@@ -455,6 +475,8 @@ class ParticleGame:
             self.water_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
         elif self.current_tool == "lava":
             self.lava_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
+        elif self.current_tool == "toxic":
+            self.toxic_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
         elif self.current_tool == "npc":
             # Drag current selected NPC particle to cursor
             if self.npc is not None and self.npc_drag_index is not None:
@@ -756,12 +778,17 @@ class ParticleGame:
             self.lava_system.neighbor_radius = w["neighbor_radius"]
             self.lava_system.max_neighbors = w["max_neighbors"]
             self.lava_system.skip_mod = w["skip_mod"]
+            # Toxic uses water-like settings too (viscous fluid)
+            self.toxic_system.neighbor_radius = w["neighbor_radius"]
+            self.toxic_system.max_neighbors = w["max_neighbors"]
+            self.toxic_system.skip_mod = w["skip_mod"]
             self._last_scale_apply = self._frame_index
 
         # Update particle systems (pass frame index for collision skipping)
         self.sand_system.update(self._frame_index)
         self.water_system.update(self._frame_index)
         self.lava_system.update(self._frame_index)
+        self.toxic_system.update(self._frame_index)
         # Update NPC physics
         dt = 1.0 / max(self.target_fps, 1)
         if self.npc is not None:
@@ -850,6 +877,7 @@ class ParticleGame:
                 self.sand_system.draw(game_surface)
                 self.water_system.draw(game_surface)
                 self.lava_system.draw(game_surface)
+                self.toxic_system.draw(game_surface)
                 # Draw NPC if present
                 if self.npc is not None:
                     self.npc.draw(game_surface)
@@ -877,7 +905,8 @@ class ParticleGame:
                     stats = (
                         f"Sand: {self.sand_system.get_particle_count()} | "
                         f"Water: {self.water_system.get_particle_count()} | "
-                        f"Lava: {self.lava_system.get_particle_count()} | FPS: {self.fps}"
+                        f"Lava: {self.lava_system.get_particle_count()} | "
+                        f"Toxic: {self.toxic_system.get_particle_count()} | FPS: {self.fps}"
                     )
                     self._stats_cache_surf = self.font.render(stats, True, (200, 200, 200))
                 if self._stats_cache_surf:
@@ -904,6 +933,7 @@ class ParticleGame:
             self.sand_system.draw(cpu_layer)
             self.water_system.draw(cpu_layer)
             self.lava_system.draw(cpu_layer)
+            self.toxic_system.draw(cpu_layer)
             if self.npc is not None:
                 self.npc.draw(cpu_layer)
             vw = self.game_width
@@ -943,6 +973,13 @@ class ParticleGame:
                 self.renderer.draw_color = (l_color[0], l_color[1], l_color[2], 255)
                 self.renderer.draw_points(l_pts_offset)
 
+            # Toxic waste: single color
+            t_color, t_points = self.toxic_system.get_point_groups()
+            if t_points:
+                t_pts_offset = [(x + self.sidebar_width, y) for (x, y) in t_points]
+                self.renderer.draw_color = (t_color[0], t_color[1], t_color[2], 255)
+                self.renderer.draw_points(t_pts_offset)
+
             # NPC: draw via CPU surface turned into texture (only if present)
             if self.npc is not None:
                 cpu_layer = pygame.Surface((self.game_width, self.height), pygame.SRCALPHA)
@@ -960,7 +997,8 @@ class ParticleGame:
             stats = (
                 f"Sand: {self.sand_system.get_particle_count()} | "
                 f"Water: {self.water_system.get_particle_count()} | "
-                f"Lava: {self.lava_system.get_particle_count()} | FPS: {self.fps}"
+                f"Lava: {self.lava_system.get_particle_count()} | "
+                f"Toxic: {self.toxic_system.get_particle_count()} | FPS: {self.fps}"
             )
             stats_surf = self.font.render(stats, True, (200, 200, 200))
             self._stats_cache_tex = Texture.from_surface(self.renderer, stats_surf)
@@ -1008,6 +1046,11 @@ class ParticleGame:
                 self._ui_npc_tex = Texture.from_surface(self.renderer, self.ui_npc_surf)
             except Exception:
                 self._ui_npc_tex = None
+        if self._ui_toxic_tex is None and hasattr(self, 'ui_toxic_surf'):
+            try:
+                self._ui_toxic_tex = Texture.from_surface(self.renderer, self.ui_toxic_surf)
+            except Exception:
+                self._ui_toxic_tex = None
 
     def _draw_overlays_cpu(self):
         # Icon button: 50% transparent black box with icon image
@@ -1159,7 +1202,7 @@ class ParticleGame:
                 self.renderer.draw_rect(sdl2rect.Rect(rect.x, rect.y, rect.w, rect.h))
 
                 surf = tile.get("surf")
-                if surf is not None and tile["key"] in ("water", "sand", "lava", "npc"):
+                if surf is not None and tile["key"] in ("water", "sand", "lava", "toxic", "npc"):
                     iw, ih = surf.get_size()
                     pad = 8
                     dest_w = max(1, rect.w - 2 * pad)
@@ -1179,6 +1222,8 @@ class ParticleGame:
                         tex = self._ui_lava_tex
                     elif tile["key"] == "npc":
                         tex = self._ui_npc_tex
+                    elif tile["key"] == "toxic":
+                        tex = self._ui_toxic_tex
                     if tex:
                         self.renderer.copy(tex, dstrect=sdl2rect.Rect(dx, dy, w, h))
                     else:
