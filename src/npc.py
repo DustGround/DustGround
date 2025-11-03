@@ -29,6 +29,9 @@ class NPC:
     def __init__(self, x, y):
         self.particles = []
         self.constraints = []
+        # Hazard state
+        self.burn_timer = 0
+        self.toxic_timer = 0
 
         head = Particle((x, y - 100))
         t1 = Particle((x, y - 60))
@@ -67,7 +70,8 @@ class NPC:
         # Visuals tuned to match a simple pixel-doll look (light gray body)
         self.size = 12
         self.head_size = 28
-        self.color = (205, 205, 210)
+        self.base_color = (205, 205, 210)
+        self.color = self.base_color
         self.outline = (120, 120, 130)
 
         # Physics and solver
@@ -132,8 +136,24 @@ class NPC:
                     p.pos.y = 0
                 if p.pos.y > h - 1:
                     p.pos.y = h - 1
+        # Decay hazard timers
+        if self.burn_timer > 0:
+            self.burn_timer -= 1
+        if self.toxic_timer > 0:
+            self.toxic_timer -= 1
 
     def draw(self, surf: pygame.Surface):
+        # Dynamic tint based on hazards
+        col = self.base_color
+        if self.toxic_timer > 0:
+            # Greener tint under toxic
+            g = min(255, int(col[1] + 60))
+            col = (max(0, col[0] - 20), g, max(0, col[2] - 20))
+        if self.burn_timer > 0:
+            # Warmer/redder under burn
+            r = min(255, int(col[0] + 50))
+            col = (r, max(0, col[1] - 20), max(0, col[2] - 20))
+        self.color = col
         # Helper: draw an oriented rectangle (bone) between a and b
         def draw_bone(a: pygame.math.Vector2, b: pygame.math.Vector2, half_w: float):
             d = b - a

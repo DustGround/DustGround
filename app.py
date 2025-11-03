@@ -269,7 +269,7 @@ class ParticleGame:
                         # Handle clicks on any tile
                         for key, rect in getattr(self, 'ui_tile_rects', {}).items():
                             if rect.collidepoint(mx, my):
-                                # Only allow known tools
+                                # Only allow known tools (blood is hazard-only, not paintable)
                                 if key in ("sand", "water", "lava", "toxic", "npc"):
                                     self.current_tool = key
                                 break
@@ -463,6 +463,7 @@ class ParticleGame:
             + self.water_system.get_particle_count()
             + self.lava_system.get_particle_count()
             + self.toxic_system.get_particle_count()
+            + self.blood_system.get_particle_count()
         )
         if total >= self.max_particles:
             # Still allow NPC dragging when at cap
@@ -600,6 +601,18 @@ class ParticleGame:
                     nearby.extend(self.lava_system.grid[cell])
         return nearby
 
+    def _get_nearby_toxic(self, x: float, y: float, radius: int = 2) -> list:
+        """Get toxic particles near a position"""
+        cell_x, cell_y = int(x // self.toxic_system.cell_size), int(y // self.toxic_system.cell_size)
+        nearby = []
+
+        for dx in range(-radius, radius + 1):
+            for dy in range(-radius, radius + 1):
+                cell = (cell_x + dx, cell_y + dy)
+                if cell in self.toxic_system.grid:
+                    nearby.extend(self.toxic_system.grid[cell])
+        return nearby
+
     def _npc_particle_coupling(self):
         """Gently couple NPC body parts with nearby particles: push particles away and apply a tiny reaction to NPC."""
         # Assume grids are up-to-date from the latest system.update calls.
@@ -733,6 +746,39 @@ class ParticleGame:
                 w.vy += -ny * outward_strength
             w.vx += dx * move_strength_water * 0.1
             w.vy += dy * move_strength_water * 0.1
+
+    def _handle_npc_hazards(self):
+        """Apply burn/bleed/toxic effects to the NPC when touching lava or toxic waste."""
+        if self.npc is None:
+            return
+        if not (self.lava_system.particles or self.toxic_system.particles):
+            return
+        contact_r2 = 4.0  # within ~2px
+        blood_per_frame = 3
+        toxic_drip_radius = 1
+        for part in self.npc.particles:
+            px, py = part.pos
+            # Check lava first
+            lavas = self._get_nearby_lava(px, py, radius=2)
+            for lv in lavas[:8]:
+                dx = lv.x - px
+                dy = lv.y - py
+                if dx*dx + dy*dy <= contact_r2:
+                    self.npc.burn_timer = max(self.npc.burn_timer, 45)
+                    # Lower speed to avoid long horizontal streaks; spray now biased downward
+                    self.blood_system.add_spray(px, py, count=blood_per_frame, speed=1.0)
+                    break
+            else:
+                # Check toxic if no lava hit
+                tox = self._get_nearby_toxic(px, py, radius=2)
+                for tv in tox[:8]:
+                    dx = tv.x - px
+                    dy = tv.y - py
+                    if dx*dx + dy*dy <= contact_r2:
+                        self.npc.toxic_timer = max(self.npc.toxic_timer, 90)
+                        self.blood_system.add_spray(px, py, count=2, speed=1.2)
+                        self.toxic_system.add_particle_cluster(int(px), int(py), radius=toxic_drip_radius)
+                        break
     
     def update(self):
         """Update all game logic"""
@@ -762,6 +808,8 @@ class ParticleGame:
             self.sand_system.get_particle_count()
             + self.water_system.get_particle_count()
             + self.lava_system.get_particle_count()
+            + self.toxic_system.get_particle_count()
+            + self.blood_system.get_particle_count()
         )
         if (self._frame_index - self._last_scale_apply) >= 15:
             # Use smoothed FPS
@@ -800,6 +848,8 @@ class ParticleGame:
 
         # Handle cross-material collisions (grids were rebuilt during updates; avoid rebuilding here)
         self._handle_cross_material_collisions()
+        # NPC hazard effects from lava/toxic
+        self._handle_npc_hazards()
     
     def draw_sidebar(self):
         """Draw the sidebar UI"""
@@ -878,6 +928,7 @@ class ParticleGame:
                 self.water_system.draw(game_surface)
                 self.lava_system.draw(game_surface)
                 self.toxic_system.draw(game_surface)
+                self.blood_system.draw(game_surface)
                 # Draw NPC if present
                 if self.npc is not None:
                     self.npc.draw(game_surface)
@@ -906,7 +957,8 @@ class ParticleGame:
                         f"Sand: {self.sand_system.get_particle_count()} | "
                         f"Water: {self.water_system.get_particle_count()} | "
                         f"Lava: {self.lava_system.get_particle_count()} | "
-                        f"Toxic: {self.toxic_system.get_particle_count()} | FPS: {self.fps}"
+                        f"Toxic: {self.toxic_system.get_particle_count()} | "
+                        f"Blood: {self.blood_system.get_particle_count()} | FPS: {self.fps}"
                     )
                     self._stats_cache_surf = self.font.render(stats, True, (200, 200, 200))
                 if self._stats_cache_surf:
@@ -934,6 +986,7 @@ class ParticleGame:
             self.water_system.draw(cpu_layer)
             self.lava_system.draw(cpu_layer)
             self.toxic_system.draw(cpu_layer)
+            self.blood_system.draw(cpu_layer)
             if self.npc is not None:
                 self.npc.draw(cpu_layer)
             vw = self.game_width
@@ -980,6 +1033,13 @@ class ParticleGame:
                 self.renderer.draw_color = (t_color[0], t_color[1], t_color[2], 255)
                 self.renderer.draw_points(t_pts_offset)
 
+            # Blood: single color
+            b_color, b_points = self.blood_system.get_point_groups()
+            if b_points:
+                b_pts_offset = [(x + self.sidebar_width, y) for (x, y) in b_points]
+                self.renderer.draw_color = (b_color[0], b_color[1], b_color[2], 255)
+                self.renderer.draw_points(b_pts_offset)
+
             # NPC: draw via CPU surface turned into texture (only if present)
             if self.npc is not None:
                 cpu_layer = pygame.Surface((self.game_width, self.height), pygame.SRCALPHA)
@@ -998,7 +1058,8 @@ class ParticleGame:
                 f"Sand: {self.sand_system.get_particle_count()} | "
                 f"Water: {self.water_system.get_particle_count()} | "
                 f"Lava: {self.lava_system.get_particle_count()} | "
-                f"Toxic: {self.toxic_system.get_particle_count()} | FPS: {self.fps}"
+                f"Toxic: {self.toxic_system.get_particle_count()} | "
+                f"Blood: {self.blood_system.get_particle_count()} | FPS: {self.fps}"
             )
             stats_surf = self.font.render(stats, True, (200, 200, 200))
             self._stats_cache_tex = Texture.from_surface(self.renderer, stats_surf)
