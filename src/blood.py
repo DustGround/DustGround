@@ -47,6 +47,11 @@ class BloodSystem:
         self.tension_rest = 3.2
         self.tension_range = 6.0
         self.tension_strength = 0.015
+        # Optional solid query
+        self._is_solid = None
+
+    def set_obstacle_query(self, fn):
+        self._is_solid = fn
 
     def add_particle(self, x: float, y: float, vx: float = 0.0, vy: float = 0.0):
         if 0 <= x < self.width and 0 <= y < self.height:
@@ -154,6 +159,12 @@ class BloodSystem:
             p.vy *= damping
             p.x += p.vx
             p.y += p.vy
+            # Solid collision
+            if self._is_solid and self._is_solid(int(p.x), int(p.y)):
+                p.x -= p.vx
+                p.y -= p.vy
+                p.vx *= -0.1
+                p.vy = 0.0
             # Bounds reflect
             if p.x < 0:
                 p.x = 0

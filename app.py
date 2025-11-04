@@ -8,6 +8,7 @@ from src.sand import SandSystem, SandParticle
 from src.water import WaterSystem, WaterParticle
 from src.lava import LavaSystem, LavaParticle
 from src.toxic import ToxicSystem
+from src.metal import MetalSystem
 from src.blood import BloodSystem
 from src.npc import NPC
 from src.opt import get_or_create_optimizations
@@ -63,7 +64,14 @@ class ParticleGame:
         self.water_system = WaterSystem(self.game_width, height)
         self.lava_system = LavaSystem(self.game_width, height)
         self.toxic_system = ToxicSystem(self.game_width, height)
+        self.metal_system = MetalSystem(self.game_width, height)
         self.blood_system = BloodSystem(self.game_width, height)
+        # Provide obstacle query (metal) to particle systems
+        self.sand_system.set_obstacle_query(self.metal_system.is_solid)
+        self.water_system.set_obstacle_query(self.metal_system.is_solid)
+        self.lava_system.set_obstacle_query(self.metal_system.is_solid)
+        self.toxic_system.set_obstacle_query(self.metal_system.is_solid)
+        self.blood_system.set_obstacle_query(self.metal_system.is_solid)
         # Camera for pan/zoom inside game area
         self.camera = Camera(world_w=self.game_width, world_h=self.height, view_w=self.game_width, view_h=self.height)
         
@@ -112,12 +120,18 @@ class ParticleGame:
         if not self.ui_toxic_surf:
             self.ui_toxic_surf = pygame.Surface((64, 64), pygame.SRCALPHA)
             self.ui_toxic_surf.fill((90, 220, 90, 255))
+        # Metal icon
+        self.ui_metal_surf = self._load_image("src/assets/metal.png")
+        if not self.ui_metal_surf:
+            self.ui_metal_surf = pygame.Surface((64, 64), pygame.SRCALPHA)
+            self.ui_metal_surf.fill((140, 140, 150, 255))
         self._ui_flask_tex = None
         self._ui_water_tex = None
         self._ui_sand_tex = None
         self._ui_lava_tex = None
         self._ui_npc_tex = None
         self._ui_toxic_tex = None
+        self._ui_metal_tex = None
 
         # Spawn menu tiles definition (order matters)
         # For now we have an image only for water; others will render as colored tiles with labels
@@ -125,6 +139,7 @@ class ParticleGame:
             {"key": "sand", "label": "SAND", "color": (200, 180, 120), "surf": self.ui_sand_surf},
             {"key": "water", "label": "WATER", "color": (80, 140, 255), "surf": self.ui_water_surf},
             {"key": "lava", "label": "LAVA", "color": (255, 120, 60), "surf": self.ui_lava_surf},
+            {"key": "metal", "label": "METAL", "color": (140, 140, 150), "surf": self.ui_metal_surf},
             {"key": "toxic", "label": "TOXIC", "color": (90, 220, 90), "surf": self.ui_toxic_surf},
             {"key": "npc", "label": "NPC", "color": (180, 180, 200), "surf": self.ui_npc_surf},
         ]
@@ -270,7 +285,7 @@ class ParticleGame:
                         for key, rect in getattr(self, 'ui_tile_rects', {}).items():
                             if rect.collidepoint(mx, my):
                                 # Only allow known tools (blood is hazard-only, not paintable)
-                                if key in ("sand", "water", "lava", "toxic", "npc"):
+                                if key in ("sand", "water", "lava", "metal", "toxic", "npc"):
                                     self.current_tool = key
                                 break
                         continue
@@ -403,6 +418,9 @@ class ParticleGame:
         if hasattr(self, 'toxic_system'):
             self.toxic_system.width = self.game_width
             self.toxic_system.height = self.height
+        if hasattr(self, 'metal_system'):
+            self.metal_system.width = self.game_width
+            self.metal_system.height = self.height
         if hasattr(self, 'blood_system'):
             self.blood_system.width = self.game_width
             self.blood_system.height = self.height
@@ -463,6 +481,7 @@ class ParticleGame:
             + self.water_system.get_particle_count()
             + self.lava_system.get_particle_count()
             + self.toxic_system.get_particle_count()
+            + self.metal_system.get_particle_count()
             + self.blood_system.get_particle_count()
         )
         if total >= self.max_particles:
@@ -476,6 +495,9 @@ class ParticleGame:
             self.water_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
         elif self.current_tool == "lava":
             self.lava_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
+        elif self.current_tool == "metal":
+            # Place a filled, thick metal block
+            self.metal_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
         elif self.current_tool == "toxic":
             self.toxic_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
         elif self.current_tool == "npc":
@@ -837,6 +859,7 @@ class ParticleGame:
         self.water_system.update(self._frame_index)
         self.lava_system.update(self._frame_index)
         self.toxic_system.update(self._frame_index)
+        self.metal_system.update(self._frame_index)
         # Update NPC physics
         dt = 1.0 / max(self.target_fps, 1)
         if self.npc is not None:
@@ -924,6 +947,7 @@ class ParticleGame:
                 game_surface = self._game_surface
                 game_surface.fill((20, 20, 20))
                 # Draw particles (CPU path)
+                self.metal_system.draw(game_surface)
                 self.sand_system.draw(game_surface)
                 self.water_system.draw(game_surface)
                 self.lava_system.draw(game_surface)
@@ -954,6 +978,7 @@ class ParticleGame:
                 if now - self._stats_updated_at > 0.25:
                     self._stats_updated_at = now
                     stats = (
+                        f"Metal: {self.metal_system.get_particle_count()} | "
                         f"Sand: {self.sand_system.get_particle_count()} | "
                         f"Water: {self.water_system.get_particle_count()} | "
                         f"Lava: {self.lava_system.get_particle_count()} | "
@@ -982,6 +1007,7 @@ class ParticleGame:
             # Composite to CPU surface, then crop/scale and upload as texture
             cpu_layer = pygame.Surface((self.game_width, self.height), pygame.SRCALPHA)
             cpu_layer.fill((20, 20, 20, 255))
+            self.metal_system.draw(cpu_layer)
             self.sand_system.draw(cpu_layer)
             self.water_system.draw(cpu_layer)
             self.lava_system.draw(cpu_layer)
@@ -1011,6 +1037,13 @@ class ParticleGame:
                 pts_offset = [(x + self.sidebar_width, y) for (x, y) in pts]
                 self.renderer.draw_color = (color[0], color[1], color[2], 255)
                 self.renderer.draw_points(pts_offset)
+
+            # Metal: single color
+            m_color, m_points = self.metal_system.get_point_groups()
+            if m_points:
+                m_pts_offset = [(x + self.sidebar_width, y) for (x, y) in m_points]
+                self.renderer.draw_color = (m_color[0], m_color[1], m_color[2], 255)
+                self.renderer.draw_points(m_pts_offset)
 
             # Water: single color
             w_color, w_points = self.water_system.get_point_groups()
@@ -1055,6 +1088,7 @@ class ParticleGame:
         if (self._stats_cache_tex is None) or (now - self._stats_updated_at > 0.25):
             self._stats_updated_at = now
             stats = (
+                f"Metal: {self.metal_system.get_particle_count()} | "
                 f"Sand: {self.sand_system.get_particle_count()} | "
                 f"Water: {self.water_system.get_particle_count()} | "
                 f"Lava: {self.lava_system.get_particle_count()} | "

@@ -50,6 +50,12 @@ class WaterSystem:
         self.neighbor_radius: int = 2
         self.max_neighbors: int = 10
         self.skip_mod: int = 1
+        # Optional solid query (e.g., metal blocks)
+        self._is_solid = None
+
+    def set_obstacle_query(self, fn):
+        """Provide a function is_solid(x:int,y:int)->bool to block movement into solids."""
+        self._is_solid = fn
         
     def add_particle(self, x: float, y: float):
         """Add a new water particle"""
@@ -154,6 +160,12 @@ class WaterSystem:
         """Update all water particles"""
         for particle in self.particles:
             particle.update(self.gravity, self.viscosity)
+            # Collide with solid obstacles (e.g., metal)
+            if self._is_solid and self._is_solid(int(particle.x), int(particle.y)):
+                particle.x -= particle.vx
+                particle.y -= particle.vy
+                particle.vx *= -0.2
+                particle.vy *= -0.2
         
         self._handle_collisions(frame_index)
         self._handle_boundaries()

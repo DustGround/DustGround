@@ -59,6 +59,11 @@ class ToxicSystem:
 		self.neighbor_radius: int = 2
 		self.max_neighbors: int = 10
 		self.skip_mod: int = 1
+		# Optional solid query (e.g., metal blocks)
+		self._is_solid = None
+
+	def set_obstacle_query(self, fn):
+		self._is_solid = fn
 
 	def add_particle(self, x: float, y: float):
 		if 0 <= x < self.width and 0 <= y < self.height:
@@ -150,6 +155,12 @@ class ToxicSystem:
 			return
 		for p in self.particles:
 			p.update(self.gravity, self.friction)
+			# Solid collision
+			if getattr(self, "_is_solid", None) and self._is_solid(int(p.x), int(p.y)):
+				p.x -= p.vx
+				p.y -= p.vy
+				p.vx *= -0.2
+				p.vy *= -0.1
 		self._handle_collisions(frame_index)
 		self._handle_boundaries()
 		# Cull out-of-bounds (with small margins)

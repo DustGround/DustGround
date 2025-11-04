@@ -35,6 +35,11 @@ class LavaSystem:
         self.grid: dict[tuple[int, int], list[LavaParticle]] = {}
         # Render color
         self.color = (255, 110, 20)
+        # Optional solid query
+        self._is_solid = None
+
+    def set_obstacle_query(self, fn):
+        self._is_solid = fn
 
     # --- API ---
     def add_particle(self, x: float, y: float):
@@ -125,6 +130,12 @@ class LavaSystem:
             p.vy *= damp_y
             p.x += p.vx
             p.y += p.vy
+            # Block by solid
+            if self._is_solid and self._is_solid(int(p.x), int(p.y)):
+                p.x -= p.vx
+                p.y -= p.vy
+                p.vx *= -0.15
+                p.vy *= -0.15
             # Bounds
             if p.x < 0:
                 p.x = 0
