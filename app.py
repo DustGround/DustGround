@@ -17,6 +17,7 @@ from src.opt import get_or_create_optimizations
 from src.scaling import recommend_settings
 from src.zoom import Camera
 from src.admin import clear_everything
+from src.bg import GridBackground
 
 # Detect GPU API availability once; the decision to USE it is based on benchmark config
 GPU_AVAILABLE = False
@@ -85,6 +86,8 @@ class ParticleGame:
         self.blocks_system.set_external_obstacle(self.metal_system.is_solid)
         # Camera for pan/zoom inside game area
         self.camera = Camera(world_w=self.game_width, world_h=self.height, view_w=self.game_width, view_h=self.height)
+        # Background grid renderer
+        self.grid_bg = GridBackground()
         
         # Current tool selection
         self.current_tool = "sand"  # "sand" or "water"
@@ -274,7 +277,7 @@ class ParticleGame:
         # Admin panel rect to the right of admin icon
         amw, amh = self.ui_admin_menu_size
         self.ui_admin_menu_rect = pygame.Rect(self.ui_admin_rect.right + 10, 10, amw, amh)
-    # Compute grid for tiles (spawn menu)
+        # Compute grid for tiles (spawn menu)
         gpad = 14
         gap = 10
         header_h = getattr(self, 'ui_header_h', 36)
@@ -1103,6 +1106,9 @@ class ParticleGame:
                     self._game_surface = pygame.Surface((self.game_width, self.height)).convert()
                 game_surface = self._game_surface
                 game_surface.fill((20, 20, 20))
+                # Background grid (CPU path)
+                if hasattr(self, 'grid_bg') and hasattr(self, 'camera'):
+                    self.grid_bg.draw_cpu(game_surface, self.camera)
                 # Draw particles (CPU path)
                 self.blocks_system.draw(game_surface)
                 self.metal_system.draw(game_surface)
@@ -1165,14 +1171,19 @@ class ParticleGame:
         # GPU path
         self.renderer.draw_color = (20, 20, 20, 255)
         self.renderer.clear()
-        # Game area background
+        # Game area background and grid
         self.renderer.draw_color = (30, 30, 30, 255)
         self.renderer.fill_rect(sdl2rect.Rect(self.sidebar_width, 0, self.game_width, self.height))
+        if hasattr(self, 'grid_bg') and hasattr(self, 'camera'):
+            self.grid_bg.draw_gpu(self.renderer, (self.sidebar_width, 0, self.game_width, self.height), self.camera)
         use_cpu_composite = getattr(self, 'camera', None) and not self.camera.is_identity()
         if use_cpu_composite:
             # Composite to CPU surface, then crop/scale and upload as texture
             cpu_layer = pygame.Surface((self.game_width, self.height), pygame.SRCALPHA)
             cpu_layer.fill((20, 20, 20, 255))
+            # Background grid on CPU composite layer
+            if hasattr(self, 'grid_bg') and hasattr(self, 'camera'):
+                self.grid_bg.draw_cpu(cpu_layer, self.camera)
             self.blocks_system.draw(cpu_layer)
             self.metal_system.draw(cpu_layer)
             self.sand_system.draw(cpu_layer)
