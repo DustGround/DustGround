@@ -8,7 +8,9 @@ from src.sand import SandSystem, SandParticle
 from src.water import WaterSystem, WaterParticle
 from src.lava import LavaSystem, LavaParticle
 from src.toxic import ToxicSystem
+from src.oil import OilSystem
 from src.metal import MetalSystem
+from src.blocks import BlocksSystem
 from src.blood import BloodSystem
 from src.npc import NPC
 from src.opt import get_or_create_optimizations
@@ -64,14 +66,22 @@ class ParticleGame:
         self.water_system = WaterSystem(self.game_width, height)
         self.lava_system = LavaSystem(self.game_width, height)
         self.toxic_system = ToxicSystem(self.game_width, height)
+        self.oil_system = OilSystem(self.game_width, height)
         self.metal_system = MetalSystem(self.game_width, height)
         self.blood_system = BloodSystem(self.game_width, height)
-        # Provide obstacle query (metal) to particle systems
-        self.sand_system.set_obstacle_query(self.metal_system.is_solid)
-        self.water_system.set_obstacle_query(self.metal_system.is_solid)
-        self.lava_system.set_obstacle_query(self.metal_system.is_solid)
-        self.toxic_system.set_obstacle_query(self.metal_system.is_solid)
-        self.blood_system.set_obstacle_query(self.metal_system.is_solid)
+        self.blocks_system = BlocksSystem(self.game_width, height)
+        # Provide combined obstacle query (metal + blocks) to particle systems
+        def _is_solid_obstacle(x: int, y: int) -> bool:
+            return self.metal_system.is_solid(x, y) or self.blocks_system.is_solid(x, y)
+        self._is_solid_obstacle = _is_solid_obstacle
+        self.sand_system.set_obstacle_query(self._is_solid_obstacle)
+        self.water_system.set_obstacle_query(self._is_solid_obstacle)
+        self.lava_system.set_obstacle_query(self._is_solid_obstacle)
+        self.toxic_system.set_obstacle_query(self._is_solid_obstacle)
+        self.oil_system.set_obstacle_query(self._is_solid_obstacle)
+        self.blood_system.set_obstacle_query(self._is_solid_obstacle)
+        # Let blocks avoid sinking into metal
+        self.blocks_system.set_external_obstacle(self.metal_system.is_solid)
         # Camera for pan/zoom inside game area
         self.camera = Camera(world_w=self.game_width, world_h=self.height, view_w=self.game_width, view_h=self.height)
         
@@ -120,24 +130,38 @@ class ParticleGame:
         if not self.ui_toxic_surf:
             self.ui_toxic_surf = pygame.Surface((64, 64), pygame.SRCALPHA)
             self.ui_toxic_surf.fill((90, 220, 90, 255))
+        # Oil icon
+        self.ui_oil_surf = self._load_image("src/assets/oil.png")
+        if not self.ui_oil_surf:
+            self.ui_oil_surf = pygame.Surface((64, 64), pygame.SRCALPHA)
+            self.ui_oil_surf.fill((60, 50, 30, 255))
         # Metal icon
         self.ui_metal_surf = self._load_image("src/assets/metal.png")
         if not self.ui_metal_surf:
             self.ui_metal_surf = pygame.Surface((64, 64), pygame.SRCALPHA)
             self.ui_metal_surf.fill((140, 140, 150, 255))
+        # Blocks icon
+        self.ui_blocks_surf = self._load_image("src/assets/blocks.png")
+        if not self.ui_blocks_surf:
+            self.ui_blocks_surf = pygame.Surface((64, 64), pygame.SRCALPHA)
+            self.ui_blocks_surf.fill((180, 180, 190, 255))
         self._ui_flask_tex = None
         self._ui_water_tex = None
         self._ui_sand_tex = None
         self._ui_lava_tex = None
         self._ui_npc_tex = None
         self._ui_toxic_tex = None
+        self._ui_oil_tex = None
         self._ui_metal_tex = None
+        self._ui_blocks_tex = None
 
         # Spawn menu tiles definition (order matters)
         # For now we have an image only for water; others will render as colored tiles with labels
         self.ui_tiles = [
+            {"key": "blocks", "label": "BLOCKS", "color": (180, 180, 190), "surf": self.ui_blocks_surf},
             {"key": "sand", "label": "SAND", "color": (200, 180, 120), "surf": self.ui_sand_surf},
             {"key": "water", "label": "WATER", "color": (80, 140, 255), "surf": self.ui_water_surf},
+            {"key": "oil", "label": "OIL", "color": (60, 50, 30), "surf": self.ui_oil_surf},
             {"key": "lava", "label": "LAVA", "color": (255, 120, 60), "surf": self.ui_lava_surf},
             {"key": "metal", "label": "METAL", "color": (140, 140, 150), "surf": self.ui_metal_surf},
             {"key": "toxic", "label": "TOXIC", "color": (90, 220, 90), "surf": self.ui_toxic_surf},
@@ -165,6 +189,10 @@ class ParticleGame:
         # Panning state
         self._pan_active = False
         self._pan_prev = None
+        # Blocks drag creation state
+        self.blocks_drag_active = False
+        self.blocks_drag_start = None
+        self.blocks_drag_current = None
 
     def _get_text_texture(self, text: str, color: Tup[int, int, int]) -> "Texture":
         """Cache and return a Texture for text rendering in GPU mode."""
@@ -285,7 +313,7 @@ class ParticleGame:
                         for key, rect in getattr(self, 'ui_tile_rects', {}).items():
                             if rect.collidepoint(mx, my):
                                 # Only allow known tools (blood is hazard-only, not paintable)
-                                if key in ("sand", "water", "lava", "metal", "toxic", "npc"):
+                                if key in ("sand", "water", "oil", "lava", "metal", "toxic", "npc", "blocks"):
                                     self.current_tool = key
                                 break
                         continue
@@ -304,6 +332,14 @@ class ParticleGame:
                                 self.npc_drag_index = self.npc.nearest_particle_index((gx, gy))
                                 self.npc.set_user_dragging(True)
                                 self.is_drawing = True
+                    elif self.current_tool == "blocks":
+                        if mx >= self.sidebar_width:
+                            vx = mx - self.sidebar_width
+                            gx, gy = self.camera.view_to_world(vx, my)
+                            self.blocks_drag_active = True
+                            self.blocks_drag_start = (int(gx), int(gy))
+                            self.blocks_drag_current = (int(gx), int(gy))
+                            self.is_drawing = True
                     else:
                         self.is_drawing = True
                 elif event.button == 3:  # Right click starts panning
@@ -418,6 +454,9 @@ class ParticleGame:
         if hasattr(self, 'toxic_system'):
             self.toxic_system.width = self.game_width
             self.toxic_system.height = self.height
+        if hasattr(self, 'oil_system'):
+            self.oil_system.width = self.game_width
+            self.oil_system.height = self.height
         if hasattr(self, 'metal_system'):
             self.metal_system.width = self.game_width
             self.metal_system.height = self.height
@@ -479,6 +518,7 @@ class ParticleGame:
         total = (
             self.sand_system.get_particle_count()
             + self.water_system.get_particle_count()
+            + self.oil_system.get_particle_count()
             + self.lava_system.get_particle_count()
             + self.toxic_system.get_particle_count()
             + self.metal_system.get_particle_count()
@@ -493,6 +533,8 @@ class ParticleGame:
             self.sand_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
         elif self.current_tool == "water":
             self.water_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
+        elif self.current_tool == "oil":
+            self.oil_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
         elif self.current_tool == "lava":
             self.lava_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
         elif self.current_tool == "metal":
@@ -513,6 +555,18 @@ class ParticleGame:
         """Handle collisions between materials (sand, water, lava)."""
         # Grids were rebuilt during each system update; avoid extra rebuild here
         MAX_NEIGHBORS = 12
+        # Oil vs Water: oil floats on water (swap tendency when oil is below water)
+        if getattr(self, 'oil_system', None) and self.oil_system.particles:
+            for oil in self.oil_system.particles:
+                waters = self._get_nearby_water(oil.x, oil.y, radius=2)
+                if len(waters) > MAX_NEIGHBORS:
+                    waters = waters[:MAX_NEIGHBORS]
+                for w in waters:
+                    if w.y > oil.y + 0.5:  # water below oil -> push oil upward, water downward
+                        oil.y -= 0.6
+                        oil.vy -= 0.25
+                        w.y += 0.3
+                        w.vy += 0.12
         # Water vs Sand: wet sand and exchange momentum
         for water in self.water_system.particles:
             sand_neighbors = self._get_nearby_sand(water.x, water.y, radius=2)
@@ -539,7 +593,7 @@ class ParticleGame:
                     water.vx -= nx * 0.1
                     water.vy -= ny * 0.1
 
-        # Lava interactions: lava destroys nearby sand/water
+        # Lava interactions: lava destroys nearby sand/water; ignites oil
         # Build removal sets and sweep afterwards
         sand_kill = set()
         water_kill = set()
@@ -573,6 +627,19 @@ class ParticleGame:
                     nx, ny = dx/d, dy/d
                     lava.vx -= nx * 0.03
                     lava.vy -= ny * 0.03
+            # Against oil: ignite quickly
+            if getattr(self, 'oil_system', None) and self.oil_system.particles:
+                oils = self._get_nearby_oil(lava.x, lava.y, radius=2)
+                if len(oils) > MAX_NEIGHBORS:
+                    oils = oils[:MAX_NEIGHBORS]
+                for o in oils:
+                    dx = o.x - lava.x
+                    dy = o.y - lava.y
+                    d2 = dx*dx + dy*dy
+                    if 0.01 < d2 <= 9.0:
+                        ignite = getattr(o, 'ignite', None)
+                        if ignite:
+                            ignite(220)
 
         # Sweep dead sand/water
         if sand_kill:
@@ -633,6 +700,18 @@ class ParticleGame:
                 cell = (cell_x + dx, cell_y + dy)
                 if cell in self.toxic_system.grid:
                     nearby.extend(self.toxic_system.grid[cell])
+        return nearby
+
+    def _get_nearby_oil(self, x: float, y: float, radius: int = 2) -> list:
+        """Get oil particles near a position"""
+        cell_x, cell_y = int(x // self.oil_system.cell_size), int(y // self.oil_system.cell_size)
+        nearby = []
+
+        for dx in range(-radius, radius + 1):
+            for dy in range(-radius, radius + 1):
+                cell = (cell_x + dx, cell_y + dy)
+                if cell in self.oil_system.grid:
+                    nearby.extend(self.oil_system.grid[cell])
         return nearby
 
     def _npc_particle_coupling(self):
@@ -852,11 +931,18 @@ class ParticleGame:
             self.toxic_system.neighbor_radius = w["neighbor_radius"]
             self.toxic_system.max_neighbors = w["max_neighbors"]
             self.toxic_system.skip_mod = w["skip_mod"]
+            # Oil uses water-like settings (thin fluid)
+            if hasattr(self, 'oil_system'):
+                self.oil_system.neighbor_radius = w["neighbor_radius"]
+                self.oil_system.max_neighbors = w["max_neighbors"]
+                self.oil_system.skip_mod = w["skip_mod"]
             self._last_scale_apply = self._frame_index
 
         # Update particle systems (pass frame index for collision skipping)
         self.sand_system.update(self._frame_index)
         self.water_system.update(self._frame_index)
+        if hasattr(self, 'oil_system'):
+            self.oil_system.update(self._frame_index)
         self.lava_system.update(self._frame_index)
         self.toxic_system.update(self._frame_index)
         self.metal_system.update(self._frame_index)
@@ -950,6 +1036,8 @@ class ParticleGame:
                 self.metal_system.draw(game_surface)
                 self.sand_system.draw(game_surface)
                 self.water_system.draw(game_surface)
+                if hasattr(self, 'oil_system'):
+                    self.oil_system.draw(game_surface)
                 self.lava_system.draw(game_surface)
                 self.toxic_system.draw(game_surface)
                 self.blood_system.draw(game_surface)
@@ -977,14 +1065,19 @@ class ParticleGame:
                 now = time.time()
                 if now - self._stats_updated_at > 0.25:
                     self._stats_updated_at = now
-                    stats = (
-                        f"Metal: {self.metal_system.get_particle_count()} | "
-                        f"Sand: {self.sand_system.get_particle_count()} | "
-                        f"Water: {self.water_system.get_particle_count()} | "
-                        f"Lava: {self.lava_system.get_particle_count()} | "
-                        f"Toxic: {self.toxic_system.get_particle_count()} | "
-                        f"Blood: {self.blood_system.get_particle_count()} | FPS: {self.fps}"
-                    )
+                    parts = [
+                        f"Metal: {self.metal_system.get_particle_count()}",
+                        f"Sand: {self.sand_system.get_particle_count()}",
+                        f"Water: {self.water_system.get_particle_count()}",
+                    ]
+                    if hasattr(self, 'oil_system'):
+                        parts.append(f"Oil: {self.oil_system.get_particle_count()}")
+                    parts.extend([
+                        f"Lava: {self.lava_system.get_particle_count()}",
+                        f"Toxic: {self.toxic_system.get_particle_count()}",
+                        f"Blood: {self.blood_system.get_particle_count()}",
+                    ])
+                    stats = " | ".join(parts) + f" | FPS: {self.fps}"
                     self._stats_cache_surf = self.font.render(stats, True, (200, 200, 200))
                 if self._stats_cache_surf:
                     self.screen.blit(self._stats_cache_surf, (self.sidebar_width + 10, self.height - 25))
@@ -1010,6 +1103,8 @@ class ParticleGame:
             self.metal_system.draw(cpu_layer)
             self.sand_system.draw(cpu_layer)
             self.water_system.draw(cpu_layer)
+            if hasattr(self, 'oil_system'):
+                self.oil_system.draw(cpu_layer)
             self.lava_system.draw(cpu_layer)
             self.toxic_system.draw(cpu_layer)
             self.blood_system.draw(cpu_layer)
@@ -1044,6 +1139,24 @@ class ParticleGame:
                 m_pts_offset = [(x + self.sidebar_width, y) for (x, y) in m_points]
                 self.renderer.draw_color = (m_color[0], m_color[1], m_color[2], 255)
                 self.renderer.draw_points(m_pts_offset)
+
+            # Oil: may return grouped colors (normal/burning)
+            oil_groups = self.oil_system.get_point_groups() if hasattr(self, 'oil_system') else None
+            if oil_groups:
+                if hasattr(oil_groups, 'items'):
+                    for color, pts in oil_groups.items():
+                        if not pts:
+                            continue
+                        pts_offset = [(x + self.sidebar_width, y) for (x, y) in pts]
+                        self.renderer.draw_color = (color[0], color[1], color[2], 255)
+                        self.renderer.draw_points(pts_offset)
+                else:
+                    # Fallback tuple (color, pts)
+                    o_color, o_points = oil_groups
+                    if o_points:
+                        o_pts_offset = [(x + self.sidebar_width, y) for (x, y) in o_points]
+                        self.renderer.draw_color = (o_color[0], o_color[1], o_color[2], 255)
+                        self.renderer.draw_points(o_pts_offset)
 
             # Water: single color
             w_color, w_points = self.water_system.get_point_groups()
@@ -1087,14 +1200,19 @@ class ParticleGame:
         now = time.time()
         if (self._stats_cache_tex is None) or (now - self._stats_updated_at > 0.25):
             self._stats_updated_at = now
-            stats = (
-                f"Metal: {self.metal_system.get_particle_count()} | "
-                f"Sand: {self.sand_system.get_particle_count()} | "
-                f"Water: {self.water_system.get_particle_count()} | "
-                f"Lava: {self.lava_system.get_particle_count()} | "
-                f"Toxic: {self.toxic_system.get_particle_count()} | "
-                f"Blood: {self.blood_system.get_particle_count()} | FPS: {self.fps}"
-            )
+            parts = [
+                f"Metal: {self.metal_system.get_particle_count()}",
+                f"Sand: {self.sand_system.get_particle_count()}",
+                f"Water: {self.water_system.get_particle_count()}",
+            ]
+            if hasattr(self, 'oil_system'):
+                parts.append(f"Oil: {self.oil_system.get_particle_count()}")
+            parts.extend([
+                f"Lava: {self.lava_system.get_particle_count()}",
+                f"Toxic: {self.toxic_system.get_particle_count()}",
+                f"Blood: {self.blood_system.get_particle_count()}",
+            ])
+            stats = " | ".join(parts) + f" | FPS: {self.fps}"
             stats_surf = self.font.render(stats, True, (200, 200, 200))
             self._stats_cache_tex = Texture.from_surface(self.renderer, stats_surf)
             self._stats_cache_surf = stats_surf
@@ -1146,6 +1264,11 @@ class ParticleGame:
                 self._ui_toxic_tex = Texture.from_surface(self.renderer, self.ui_toxic_surf)
             except Exception:
                 self._ui_toxic_tex = None
+        if self._ui_oil_tex is None and hasattr(self, 'ui_oil_surf'):
+            try:
+                self._ui_oil_tex = Texture.from_surface(self.renderer, self.ui_oil_surf)
+            except Exception:
+                self._ui_oil_tex = None
 
     def _draw_overlays_cpu(self):
         # Icon button: 50% transparent black box with icon image
@@ -1297,7 +1420,7 @@ class ParticleGame:
                 self.renderer.draw_rect(sdl2rect.Rect(rect.x, rect.y, rect.w, rect.h))
 
                 surf = tile.get("surf")
-                if surf is not None and tile["key"] in ("water", "sand", "lava", "toxic", "npc"):
+                if surf is not None and tile["key"] in ("water", "sand", "oil", "lava", "toxic", "npc"):
                     iw, ih = surf.get_size()
                     pad = 8
                     dest_w = max(1, rect.w - 2 * pad)
@@ -1313,6 +1436,8 @@ class ParticleGame:
                         tex = self._ui_water_tex
                     elif tile["key"] == "sand":
                         tex = self._ui_sand_tex
+                    elif tile["key"] == "oil":
+                        tex = self._ui_oil_tex
                     elif tile["key"] == "lava":
                         tex = self._ui_lava_tex
                     elif tile["key"] == "npc":
