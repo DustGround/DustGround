@@ -16,6 +16,7 @@ from src.npc import NPC
 from src.opt import get_or_create_optimizations
 from src.scaling import recommend_settings
 from src.zoom import Camera
+from src.admin import clear_everything
 
 # Detect GPU API availability once; the decision to USE it is based on benchmark config
 GPU_AVAILABLE = False
@@ -93,10 +94,13 @@ class ParticleGame:
         # Overlay UI (no sidebar)
         self.buttons = {}
         self.ui_show_spawn = False
+        self.ui_show_admin = False
         # Tunable overlay sizes
         self.ui_icon_size = 56
         # Bigger spawn menu by default
         self.ui_menu_size = (460, 340)  # width, height
+        # Admin menu size
+        self.ui_admin_menu_size = (300, 160)
         # Header height for the spawn menu (used by layout and drawing)
         self.ui_header_h = 36
         # Grid columns for spawn tiles (horizontal row)
@@ -154,6 +158,7 @@ class ParticleGame:
         self._ui_oil_tex = None
         self._ui_metal_tex = None
         self._ui_blocks_tex = None
+        self._ui_admin_tex = None
 
         # Spawn menu tiles definition (order matters)
         # For now we have an image only for water; others will render as colored tiles with labels
@@ -168,8 +173,7 @@ class ParticleGame:
             {"key": "npc", "label": "NPC", "color": (180, 180, 200), "surf": self.ui_npc_surf},
         ]
         self.ui_tile_rects = {}
-        # Keep a single horizontal row across all tiles
-        self.ui_grid_cols = len(self.ui_tiles)
+        # Keep configured grid cols (set earlier), do not override with len(tiles)
         # Recompute layout now that tiles are defined
         self._layout_overlay_ui()
         
@@ -262,25 +266,38 @@ class ParticleGame:
     def _layout_overlay_ui(self):
         # Icon at top-left
         self.ui_flask_rect = pygame.Rect(10, 10, self.ui_icon_size, self.ui_icon_size)
+        # Admin icon to the right of flask
+        self.ui_admin_rect = pygame.Rect(self.ui_flask_rect.right + 8, 10, self.ui_icon_size, self.ui_icon_size)
         # Menu to the right of icon
         mw, mh = self.ui_menu_size
         self.ui_menu_rect = pygame.Rect(self.ui_flask_rect.right + 10, 10, mw, mh)
-        # Compute grid for tiles
-        gpad = 16
-        gap = 12
+        # Admin panel rect to the right of admin icon
+        amw, amh = self.ui_admin_menu_size
+        self.ui_admin_menu_rect = pygame.Rect(self.ui_admin_rect.right + 10, 10, amw, amh)
+    # Compute grid for tiles (spawn menu)
+        gpad = 14
+        gap = 10
         header_h = getattr(self, 'ui_header_h', 36)
         area_x = self.ui_menu_rect.x + gpad
         area_y = self.ui_menu_rect.y + header_h + gpad
         area_w = mw - 2 * gpad
         area_h = mh - header_h - 2 * gpad - 20  # reserve some space for labels
 
-        cols = max(1, int(getattr(self, 'ui_grid_cols', 2)))
-        rows = max(1, (len(getattr(self, 'ui_tiles', [])) + cols - 1) // cols)
-        # Prefer compact tiles; clamp to avoid oversized visuals
+        # Dynamically pack as many columns as fit to avoid unnecessary new lines
+        tiles = getattr(self, 'ui_tiles', [])
+        n = len(tiles)
+        min_tile_w = 48
+        max_tile_w = 72
+        # How many columns can fit at minimum tile width?
+        max_cols_fit = max(1, int((area_w + gap) // (min_tile_w + gap)))
+        cols = max(1, min(n, max_cols_fit))
+        rows = max(1, (n + cols - 1) // cols)
+        # Compute available size per tile
         tile_w_avail = max(1, (area_w - (cols - 1) * gap) // cols)
         tile_h_avail = max(1, (area_h - (rows - 1) * gap) // rows)
-        tile_w = max(64, min(90, tile_w_avail))
-        tile_h = max(64, min(96, tile_h_avail))
+        # Final tile size within bounds
+        tile_w = max(min_tile_w, min(max_tile_w, tile_w_avail))
+        tile_h = max(48, min(72, tile_h_avail))
 
         # Build rects per tile in order
         self.ui_tile_rects = {}
@@ -307,6 +324,16 @@ class ParticleGame:
                     # UI clicks first
                     if self.ui_flask_rect.collidepoint(mx, my):
                         self.ui_show_spawn = not self.ui_show_spawn
+                        # Hide admin if opening spawn
+                        if self.ui_show_spawn:
+                            setattr(self, 'ui_show_admin', False)
+                        continue
+                    if hasattr(self, 'ui_admin_rect') and self.ui_admin_rect.collidepoint(mx, my):
+                        # Toggle admin panel
+                        self.ui_show_admin = not getattr(self, 'ui_show_admin', False)
+                        # Hide spawn if opening admin
+                        if self.ui_show_admin:
+                            self.ui_show_spawn = False
                         continue
                     if self.ui_show_spawn and self.ui_menu_rect.collidepoint(mx, my):
                         # Handle clicks on any tile
@@ -317,6 +344,21 @@ class ParticleGame:
                                     self.current_tool = key
                                 break
                         continue
+                    # Admin panel button click
+                    if getattr(self, 'ui_show_admin', False) and hasattr(self, 'ui_admin_menu_rect') and self.ui_admin_menu_rect.collidepoint(mx, my):
+                        # Button rect inside panel
+                        if hasattr(self, 'ui_admin_clear_rect') and self.ui_admin_clear_rect and self.ui_admin_clear_rect.collidepoint(mx, my):
+                            try:
+                                clear_everything(self)
+                            except Exception:
+                                # Fallback inline clear
+                                try:
+                                    self.sand_system.clear(); self.water_system.clear(); self.lava_system.clear(); self.toxic_system.clear();
+                                    if hasattr(self, 'oil_system'): self.oil_system.clear()
+                                    self.metal_system.clear(); self.blood_system.clear(); self.blocks_system.clear(); self.npc = None; self.npc_drag_index = None
+                                except Exception:
+                                    pass
+                            continue
                     # If NPC tool active, start dragging nearest body part in game area
                     if self.current_tool == "npc":
                         if mx >= self.sidebar_width:
@@ -524,7 +566,10 @@ class ParticleGame:
         mouse_x, mouse_y = pygame.mouse.get_pos()
         
         # Block drawing when cursor over overlay UI
-        if self.ui_flask_rect.collidepoint(mouse_x, mouse_y) or (self.ui_show_spawn and self.ui_menu_rect.collidepoint(mouse_x, mouse_y)):
+        if (self.ui_flask_rect.collidepoint(mouse_x, mouse_y)
+            or (getattr(self, 'ui_admin_rect', None) and self.ui_admin_rect.collidepoint(mouse_x, mouse_y))
+            or (self.ui_show_spawn and self.ui_menu_rect.collidepoint(mouse_x, mouse_y))
+            or (getattr(self, 'ui_show_admin', False) and getattr(self, 'ui_admin_menu_rect', None) and self.ui_admin_menu_rect.collidepoint(mouse_x, mouse_y))):
             return
         # Blocks are created on mouse release; don't stamp during drag
         if self.current_tool == "blocks":
@@ -795,7 +840,12 @@ class ParticleGame:
         # Mouse position
         mx, my = pygame.mouse.get_pos()
         # Skip when hovering overlay UI
-        if self.ui_flask_rect.collidepoint(mx, my) or (self.ui_show_spawn and self.ui_menu_rect.collidepoint(mx, my)):
+        if (
+            self.ui_flask_rect.collidepoint(mx, my)
+            or (getattr(self, 'ui_admin_rect', None) and self.ui_admin_rect.collidepoint(mx, my))
+            or (self.ui_show_spawn and self.ui_menu_rect.collidepoint(mx, my))
+            or (getattr(self, 'ui_show_admin', False) and getattr(self, 'ui_admin_menu_rect', None) and self.ui_admin_menu_rect.collidepoint(mx, my))
+        ):
             self._prev_mouse = (mx, my)
             return
         # Update previous mouse storage
@@ -1326,6 +1376,27 @@ class ParticleGame:
             dy = self.ui_flask_rect.y + (self.ui_flask_rect.h - scaled.get_height()) // 2
             self.screen.blit(scaled, (dx, dy))
 
+        # Admin icon (to the right of flask)
+        if hasattr(self, 'ui_admin_rect'):
+            overlay2 = pygame.Surface(self.ui_admin_rect.size, pygame.SRCALPHA)
+            overlay2.fill((0, 0, 0, 128))
+            self.screen.blit(overlay2, self.ui_admin_rect.topleft)
+            pygame.draw.rect(self.screen, (90, 90, 90), self.ui_admin_rect, 1)
+            if not hasattr(self, 'ui_admin_surf'):
+                self.ui_admin_surf = self._load_image("src/assets/admin.png")
+                if not self.ui_admin_surf:
+                    self.ui_admin_surf = pygame.Surface((32, 32), pygame.SRCALPHA)
+                    self.ui_admin_surf.fill((220, 220, 220, 255))
+            pad2 = 6
+            dest_w2 = max(1, self.ui_admin_rect.w - 2 * pad2)
+            dest_h2 = max(1, self.ui_admin_rect.h - 2 * pad2)
+            iw2, ih2 = self.ui_admin_surf.get_size()
+            scale2 = min(dest_w2 / iw2, dest_h2 / ih2)
+            scaled2 = pygame.transform.smoothscale(self.ui_admin_surf, (int(iw2 * scale2), int(ih2 * scale2)))
+            dx2 = self.ui_admin_rect.x + (self.ui_admin_rect.w - scaled2.get_width()) // 2
+            dy2 = self.ui_admin_rect.y + (self.ui_admin_rect.h - scaled2.get_height()) // 2
+            self.screen.blit(scaled2, (dx2, dy2))
+
         # Spawn menu if visible: larger, styled panel with header and shadow
         if self.ui_show_spawn:
             mw, mh = self.ui_menu_rect.size
@@ -1358,12 +1429,12 @@ class ParticleGame:
                     continue
                 hovered = rect.collidepoint(mx, my)
                 tile_bg = pygame.Surface(rect.size, pygame.SRCALPHA)
-                base_alpha = 205 if hovered else 190
+                base_alpha = 215 if hovered else 190
+                # Slightly brighter if selected (no stroke)
+                if self.current_tool == tile["key"]:
+                    base_alpha = 230 if hovered else 210
                 pygame.draw.rect(tile_bg, (25, 25, 25, base_alpha), pygame.Rect(0, 0, rect.w, rect.h), border_radius=8)
                 self.screen.blit(tile_bg, rect.topleft)
-                # Border and hover
-                border_col = (120, 120, 120) if not hovered else (170, 170, 170)
-                pygame.draw.rect(self.screen, border_col, rect, 1, border_radius=8)
                 # Image or placeholder
                 surf = tile.get("surf")
                 if surf:
@@ -1374,7 +1445,8 @@ class ParticleGame:
                     scale = min(dw / iw, dh / ih)
                     img = pygame.transform.smoothscale(surf, (int(iw * scale), int(ih * scale)))
                     dx = rect.x + (rect.w - img.get_width()) // 2
-                    dy = rect.y + (rect.h - img.get_height()) // 2
+                    # Leave space for label at the bottom inside the tile
+                    dy = rect.y + (rect.h - img.get_height()) // 2 - 6
                     self.screen.blit(img, (dx, dy))
                 else:
                     # Colored placeholder
@@ -1383,14 +1455,46 @@ class ParticleGame:
                     px = rect.x + (rect.w - ph.get_width()) // 2
                     py = rect.y + (rect.h - ph.get_height()) // 2
                     self.screen.blit(ph, (px, py))
-                # Selection border if selected
-                if self.current_tool == tile["key"]:
-                    pygame.draw.rect(self.screen, (100, 160, 255), rect, 2, border_radius=8)
-                # Label under tile
-                label_surf = self.button_font.render(tile["label"], True, (200, 200, 200))
+                # Label inside tile at bottom
+                label_surf = self.button_font.render(tile["label"], True, (210, 210, 210))
                 lx = rect.x + (rect.w - label_surf.get_width()) // 2
-                ly = rect.bottom + 6
+                ly = rect.bottom - label_surf.get_height() - 6
+                # Subtle background for label readability
+                label_bg = pygame.Surface((label_surf.get_width()+8, label_surf.get_height()+4), pygame.SRCALPHA)
+                label_bg.fill((0, 0, 0, 90))
+                self.screen.blit(label_bg, (lx-4, ly-2))
                 self.screen.blit(label_surf, (lx, ly))
+
+        # Admin panel
+        if getattr(self, 'ui_show_admin', False):
+            amw, amh = self.ui_admin_menu_rect.size
+            header_h = getattr(self, 'ui_header_h', 36)
+            # Shadow
+            shadow = pygame.Surface((amw, amh), pygame.SRCALPHA)
+            pygame.draw.rect(shadow, (0, 0, 0, 100), pygame.Rect(0, 0, amw, amh), border_radius=10)
+            self.screen.blit(shadow, (self.ui_admin_menu_rect.x + 3, self.ui_admin_menu_rect.y + 4))
+            panel = pygame.Surface((amw, amh), pygame.SRCALPHA)
+            pygame.draw.rect(panel, (0, 0, 0, 180), pygame.Rect(0, 0, amw, amh), border_radius=10)
+            pygame.draw.rect(panel, (12, 12, 12, 210), pygame.Rect(0, 0, amw, header_h), border_radius=10)
+            pygame.draw.rect(panel, (100, 100, 100, 220), pygame.Rect(0, 0, amw, amh), width=1, border_radius=10)
+            pygame.draw.rect(panel, (255, 255, 255, 25), pygame.Rect(1, 1, amw - 2, amh - 2), width=1, border_radius=9)
+            self.screen.blit(panel, self.ui_admin_menu_rect.topleft)
+            title_text = self.button_font.render("ADMIN", True, (220, 220, 220))
+            ty = self.ui_admin_menu_rect.y + (header_h - title_text.get_height()) // 2
+            self.screen.blit(title_text, (self.ui_admin_menu_rect.x + 12, ty))
+            # Clear button
+            btn_w, btn_h = amw - 32, 40
+            btn_x = self.ui_admin_menu_rect.x + 16
+            btn_y = self.ui_admin_menu_rect.y + header_h + 20
+            self.ui_admin_clear_rect = pygame.Rect(btn_x, btn_y, btn_w, btn_h)
+            hovered = self.ui_admin_clear_rect.collidepoint(pygame.mouse.get_pos())
+            pygame.draw.rect(self.screen, (30, 30, 30), self.ui_admin_clear_rect, border_radius=8)
+            if hovered:
+                pygame.draw.rect(self.screen, (60, 60, 60), self.ui_admin_clear_rect, 0, border_radius=8)
+            label = self.button_font.render("CLEAR EVERYTHING", True, (220, 220, 220))
+            lrx = self.ui_admin_clear_rect.x + (self.ui_admin_clear_rect.w - label.get_width()) // 2
+            lry = self.ui_admin_clear_rect.y + (self.ui_admin_clear_rect.h - label.get_height()) // 2
+            self.screen.blit(label, (lrx, lry))
 
         # Blocks drag preview rectangle (drawn over the world)
         if self.current_tool == "blocks" and self.blocks_drag_active and self.blocks_drag_start and self.blocks_drag_current:
@@ -1411,7 +1515,7 @@ class ParticleGame:
 
     def _draw_overlays_gpu(self):
         self._ensure_ui_textures()
-        # Icon button box
+        # Icon button box (spawn)
         self.renderer.draw_color = (0, 0, 0, 128)
         self.renderer.fill_rect(sdl2rect.Rect(self.ui_flask_rect.x, self.ui_flask_rect.y, self.ui_flask_rect.w, self.ui_flask_rect.h))
         # Border for icon box
@@ -1437,6 +1541,40 @@ class ParticleGame:
                 self.renderer.copy(tmp_tex, dstrect=sdl2rect.Rect(dx, dy, w, h))
             except Exception:
                 pass
+
+        # Admin icon box
+        if hasattr(self, 'ui_admin_rect'):
+            self.renderer.draw_color = (0, 0, 0, 128)
+            self.renderer.fill_rect(sdl2rect.Rect(self.ui_admin_rect.x, self.ui_admin_rect.y, self.ui_admin_rect.w, self.ui_admin_rect.h))
+            self.renderer.draw_color = (90, 90, 90, 255)
+            self.renderer.draw_rect(sdl2rect.Rect(self.ui_admin_rect.x, self.ui_admin_rect.y, self.ui_admin_rect.w, self.ui_admin_rect.h))
+            if self._ui_admin_tex is None:
+                try:
+                    if not hasattr(self, 'ui_admin_surf'):
+                        self.ui_admin_surf = self._load_image("src/assets/admin.png")
+                    if self.ui_admin_surf:
+                        self._ui_admin_tex = Texture.from_surface(self.renderer, self.ui_admin_surf)
+                except Exception:
+                    self._ui_admin_tex = None
+            iw2, ih2 = (0, 0)
+            if hasattr(self, 'ui_admin_surf') and self.ui_admin_surf:
+                iw2, ih2 = self.ui_admin_surf.get_size()
+            pad2 = 6
+            dest_w2 = max(1, self.ui_admin_rect.w - 2 * pad2)
+            dest_h2 = max(1, self.ui_admin_rect.h - 2 * pad2)
+            scale2 = min(dest_w2 / (iw2 or 1), dest_h2 / (ih2 or 1))
+            w2 = int((iw2 or 1) * scale2)
+            h2 = int((ih2 or 1) * scale2)
+            dx2 = self.ui_admin_rect.x + (self.ui_admin_rect.w - w2) // 2
+            dy2 = self.ui_admin_rect.y + (self.ui_admin_rect.h - h2) // 2
+            if self._ui_admin_tex:
+                self.renderer.copy(self._ui_admin_tex, dstrect=sdl2rect.Rect(dx2, dy2, w2, h2))
+            elif hasattr(self, 'ui_admin_surf') and self.ui_admin_surf:
+                try:
+                    tmp2 = Texture.from_surface(self.renderer, self.ui_admin_surf)
+                    self.renderer.copy(tmp2, dstrect=sdl2rect.Rect(dx2, dy2, w2, h2))
+                except Exception:
+                    pass
 
         if self.ui_show_spawn:
             header_h = getattr(self, 'ui_header_h', 36)
@@ -1466,12 +1604,12 @@ class ParticleGame:
                 if not rect:
                     continue
                 hovered = rect.collidepoint(mx, my)
-                alpha = 200 if hovered else 180
+                alpha = 215 if hovered else 185
+                # Slightly brighter if selected
+                if self.current_tool == tile["key"]:
+                    alpha = 230 if hovered else 205
                 self.renderer.draw_color = (25, 25, 25, alpha)
                 self.renderer.fill_rect(sdl2rect.Rect(rect.x, rect.y, rect.w, rect.h))
-                border_col = (120, 120, 120, 255) if not hovered else (170, 170, 170, 255)
-                self.renderer.draw_color = border_col
-                self.renderer.draw_rect(sdl2rect.Rect(rect.x, rect.y, rect.w, rect.h))
 
                 surf = tile.get("surf")
                 if surf is not None and tile["key"] in ("water", "sand", "oil", "lava", "toxic", "npc", "blocks"):
@@ -1514,17 +1652,52 @@ class ParticleGame:
                     inset = 8
                     self.renderer.fill_rect(sdl2rect.Rect(rect.x + inset, rect.y + inset, max(0, rect.w - 2 * inset), max(0, rect.h - 2 * inset)))
 
-                # Selection border
-                if self.current_tool == tile["key"]:
-                    self.renderer.draw_color = (100, 160, 255, 255)
-                    self.renderer.draw_rect(sdl2rect.Rect(rect.x, rect.y, rect.w, rect.h))
-                # Label
+                # Label inside tile at bottom
                 lbl = tile["label"]
-                label_tex = self._get_text_texture(lbl, (200, 200, 200))
-                label_surf = self.button_font.render(lbl, True, (200, 200, 200))
+                label_surf = self.button_font.render(lbl, True, (210, 210, 210))
+                label_tex = self._get_text_texture(lbl, (210, 210, 210))
                 lx = rect.x + (rect.w - label_surf.get_width()) // 2
-                ly = rect.bottom + 6
+                ly = rect.bottom - label_surf.get_height() - 6
+                # Subtle background for readability (drawn as a filled rect)
+                self.renderer.draw_color = (0, 0, 0, 90)
+                self.renderer.fill_rect(sdl2rect.Rect(lx-4, ly-2, label_surf.get_width()+8, label_surf.get_height()+4))
                 self.renderer.copy(label_tex, dstrect=sdl2rect.Rect(lx, ly, label_surf.get_width(), label_surf.get_height()))
+
+        # Admin panel (GPU)
+        if getattr(self, 'ui_show_admin', False) and hasattr(self, 'ui_admin_menu_rect'):
+            header_h = getattr(self, 'ui_header_h', 36)
+            # Shadow
+            self.renderer.draw_color = (0, 0, 0, 100)
+            self.renderer.fill_rect(sdl2rect.Rect(self.ui_admin_menu_rect.x + 3, self.ui_admin_menu_rect.y + 4, self.ui_admin_menu_rect.w, self.ui_admin_menu_rect.h))
+            # Panel
+            self.renderer.draw_color = (0, 0, 0, 180)
+            self.renderer.fill_rect(sdl2rect.Rect(self.ui_admin_menu_rect.x, self.ui_admin_menu_rect.y, self.ui_admin_menu_rect.w, self.ui_admin_menu_rect.h))
+            # Header
+            self.renderer.draw_color = (12, 12, 12, 210)
+            self.renderer.fill_rect(sdl2rect.Rect(self.ui_admin_menu_rect.x, self.ui_admin_menu_rect.y, self.ui_admin_menu_rect.w, header_h))
+            # Border
+            self.renderer.draw_color = (100, 100, 100, 255)
+            self.renderer.draw_rect(sdl2rect.Rect(self.ui_admin_menu_rect.x, self.ui_admin_menu_rect.y, self.ui_admin_menu_rect.w, self.ui_admin_menu_rect.h))
+            # Title
+            title = "ADMIN"
+            title_tex = self._get_text_texture(title, (220, 220, 220))
+            title_surf = self.button_font.render(title, True, (220, 220, 220))
+            ty = self.ui_admin_menu_rect.y + (header_h - title_surf.get_height()) // 2
+            self.renderer.copy(title_tex, dstrect=sdl2rect.Rect(self.ui_admin_menu_rect.x + 12, ty, title_surf.get_width(), title_surf.get_height()))
+            # Button rect and label
+            btn_w, btn_h = self.ui_admin_menu_rect.w - 32, 40
+            btn_x = self.ui_admin_menu_rect.x + 16
+            btn_y = self.ui_admin_menu_rect.y + header_h + 20
+            self.ui_admin_clear_rect = pygame.Rect(btn_x, btn_y, btn_w, btn_h)
+            # Draw button background
+            self.renderer.draw_color = (30, 30, 30, 255)
+            self.renderer.fill_rect(sdl2rect.Rect(btn_x, btn_y, btn_w, btn_h))
+            lbl = "CLEAR EVERYTHING"
+            lbl_surf = self.button_font.render(lbl, True, (220, 220, 220))
+            lbl_tex = self._get_text_texture(lbl, (220, 220, 220))
+            lrx = btn_x + (btn_w - lbl_surf.get_width()) // 2
+            lry = btn_y + (btn_h - lbl_surf.get_height()) // 2
+            self.renderer.copy(lbl_tex, dstrect=sdl2rect.Rect(lrx, lry, lbl_surf.get_width(), lbl_surf.get_height()))
         # Blocks drag preview rectangle (GPU)
         if self.current_tool == "blocks" and self.blocks_drag_active and self.blocks_drag_start and self.blocks_drag_current:
             (sx, sy) = self.blocks_drag_start
