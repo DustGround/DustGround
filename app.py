@@ -18,6 +18,7 @@ from src.scaling import recommend_settings
 from src.zoom import Camera
 from src.admin import clear_everything
 from src.bg import GridBackground
+from src.menu import MainMenu
 
 # Detect GPU API availability once; the decision to USE it is based on benchmark config
 GPU_AVAILABLE = False
@@ -43,7 +44,7 @@ class ParticleGame:
 
         # Show black CPU window immediately
         self.screen = pygame.display.set_mode((width, height), pygame.RESIZABLE | pygame.DOUBLEBUF)
-        pygame.display.set_caption("Particle Physics Playground")
+        pygame.display.set_caption("Dustground")
 
         # Defer benchmark and final renderer selection to background thread
         self.ready = False
@@ -88,6 +89,9 @@ class ParticleGame:
         self.camera = Camera(world_w=self.game_width, world_h=self.height, view_w=self.game_width, view_h=self.height)
         # Background grid renderer
         self.grid_bg = GridBackground()
+        # Main menu (shown on launch)
+        self.show_main_menu = True
+        self.menu = MainMenu()
         
         # Current tool selection
         self.current_tool = "sand"  # "sand" or "water"
@@ -314,6 +318,26 @@ class ParticleGame:
     def handle_events(self) -> bool:
         """Handle pygame events. Returns False if game should quit."""
         for event in pygame.event.get():
+            # If main menu is visible, route input there first
+            if getattr(self, 'show_main_menu', False):
+                if event.type == pygame.QUIT:
+                    return False
+                if event.type == pygame.VIDEORESIZE:
+                    self._apply_resize(event.w, event.h)
+                    continue
+                action = self.menu.handle_event(event)
+                if action == "play":
+                    self.show_main_menu = False
+                    # Reset camera state on entering game
+                    if hasattr(self, 'camera') and self.camera:
+                        self.camera.scale = 1.0
+                        self.camera.off_x = 0.0
+                        self.camera.off_y = 0.0
+                    continue
+                elif action == "quit":
+                    return False
+                # While menu is showing, consume other events
+                continue
             if event.type == pygame.QUIT:
                 return False
             # Handle window resize for both CPU and GPU paths
@@ -956,6 +980,15 @@ class ParticleGame:
     
     def update(self):
         """Update all game logic"""
+        # Main menu takes over updates when visible
+        if getattr(self, 'show_main_menu', False):
+            if hasattr(self, 'menu'):
+                self.menu.update()
+            # Maintain simple frame/FPS counters
+            self._frame_index += 1
+            if hasattr(self, 'clock'):
+                self.fps = int(self.clock.get_fps())
+            return
         self._draw_on_canvas()
         
         # During loading screen, skip updates
@@ -1095,9 +1128,24 @@ class ParticleGame:
     
     def draw(self):
         """Render the game"""
-        if not self.ready or not self.use_gpu:
+        if getattr(self, 'show_main_menu', False) or (not self.ready or not self.use_gpu):
             # Clear screen
             self.screen.fill((20, 20, 20))
+            if getattr(self, 'show_main_menu', False):
+                # Draw menu background using its own camera
+                pygame.draw.rect(self.screen, (30, 30, 30), (self.sidebar_width, 0, self.game_width, self.height))
+                # Prepare CPU surface for grid
+                if (self._game_surface is None) or (self._game_surface.get_size() != (self.game_width, self.height)):
+                    self._game_surface = pygame.Surface((self.game_width, self.height)).convert()
+                game_surface = self._game_surface
+                game_surface.fill((30, 30, 30))
+                if hasattr(self, 'grid_bg') and hasattr(self, 'menu'):
+                    self.grid_bg.draw_cpu(game_surface, self.menu.camera)
+                self.screen.blit(game_surface, (self.sidebar_width, 0))
+                # Draw menu options
+                self.menu.draw_cpu(self.screen)
+                pygame.display.flip()
+                return
             if self.ready:
                 # Draw game area
                 pygame.draw.rect(self.screen, (30, 30, 30), (self.sidebar_width, 0, self.game_width, self.height))
@@ -1174,6 +1222,13 @@ class ParticleGame:
         # Game area background and grid
         self.renderer.draw_color = (30, 30, 30, 255)
         self.renderer.fill_rect(sdl2rect.Rect(self.sidebar_width, 0, self.game_width, self.height))
+        # Menu render path on GPU
+        if getattr(self, 'show_main_menu', False):
+            if hasattr(self, 'grid_bg') and hasattr(self, 'menu'):
+                self.grid_bg.draw_gpu(self.renderer, (self.sidebar_width, 0, self.game_width, self.height), self.menu.camera)
+                self.menu.draw_gpu(self.renderer)
+            self.renderer.present()
+            return
         if hasattr(self, 'grid_bg') and hasattr(self, 'camera'):
             self.grid_bg.draw_gpu(self.renderer, (self.sidebar_width, 0, self.game_width, self.height), self.camera)
         use_cpu_composite = getattr(self, 'camera', None) and not self.camera.is_identity()
@@ -1745,7 +1800,7 @@ class ParticleGame:
                     except Exception:
                         pass
                     # Create GPU window/renderer
-                    self.window = Window("Particle Physics Playground", size=(self.width, self.height))
+                    self.window = Window("Dustground", size=(self.width, self.height))
                     try:
                         self.window.resizable = True
                     except Exception:
@@ -1757,7 +1812,7 @@ class ParticleGame:
                     if not pygame.display.get_init():
                         pygame.display.init()
                         self.screen = pygame.display.set_mode((self.width, self.height), pygame.SCALED | pygame.DOUBLEBUF)
-                        pygame.display.set_caption("Particle Physics Playground")
+                        pygame.display.set_caption("Dustground")
 
                 self.ready = True
             self.update()
