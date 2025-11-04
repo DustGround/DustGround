@@ -355,6 +355,13 @@ class ParticleGame:
                         self.npc_drag_index = None
                         if self.npc:
                             self.npc.set_user_dragging(False)
+                    if self.current_tool == "blocks" and self.blocks_drag_active and self.blocks_drag_start and self.blocks_drag_current:
+                        x0, y0 = self.blocks_drag_start
+                        x1, y1 = self.blocks_drag_current
+                        self.blocks_system.add_block_rect(x0, y0, x1, y1)
+                        self.blocks_drag_active = False
+                        self.blocks_drag_start = None
+                        self.blocks_drag_current = None
                 elif event.button == 3:
                     self._pan_active = False
                     self._pan_prev = None
@@ -368,6 +375,13 @@ class ParticleGame:
                     # Pan opposite to drag for natural feel
                     self.camera.pan_by(-dx, -dy)
                     self._pan_prev = (mx, my)
+                # Update blocks drag current
+                if self.current_tool == "blocks" and self.blocks_drag_active:
+                    mx, my = event.pos
+                    if mx >= self.sidebar_width:
+                        vx = mx - self.sidebar_width
+                        gx, gy = self.camera.view_to_world(vx, my)
+                        self.blocks_drag_current = (int(gx), int(gy))
                     
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
@@ -460,6 +474,9 @@ class ParticleGame:
         if hasattr(self, 'metal_system'):
             self.metal_system.width = self.game_width
             self.metal_system.height = self.height
+        if hasattr(self, 'blocks_system'):
+            self.blocks_system.width = self.game_width
+            self.blocks_system.height = self.height
         if hasattr(self, 'blood_system'):
             self.blood_system.width = self.game_width
             self.blood_system.height = self.height
@@ -508,6 +525,9 @@ class ParticleGame:
         
         # Block drawing when cursor over overlay UI
         if self.ui_flask_rect.collidepoint(mouse_x, mouse_y) or (self.ui_show_spawn and self.ui_menu_rect.collidepoint(mouse_x, mouse_y)):
+            return
+        # Blocks are created on mouse release; don't stamp during drag
+        if self.current_tool == "blocks":
             return
         
         # Adjust coordinates to game view then world space (camera aware)
@@ -946,6 +966,7 @@ class ParticleGame:
         self.lava_system.update(self._frame_index)
         self.toxic_system.update(self._frame_index)
         self.metal_system.update(self._frame_index)
+        self.blocks_system.update(self._frame_index)
         # Update NPC physics
         dt = 1.0 / max(self.target_fps, 1)
         if self.npc is not None:
@@ -1033,6 +1054,7 @@ class ParticleGame:
                 game_surface = self._game_surface
                 game_surface.fill((20, 20, 20))
                 # Draw particles (CPU path)
+                self.blocks_system.draw(game_surface)
                 self.metal_system.draw(game_surface)
                 self.sand_system.draw(game_surface)
                 self.water_system.draw(game_surface)
@@ -1066,6 +1088,7 @@ class ParticleGame:
                 if now - self._stats_updated_at > 0.25:
                     self._stats_updated_at = now
                     parts = [
+                        f"Blocks: {self.blocks_system.get_particle_count()}",
                         f"Metal: {self.metal_system.get_particle_count()}",
                         f"Sand: {self.sand_system.get_particle_count()}",
                         f"Water: {self.water_system.get_particle_count()}",
@@ -1100,6 +1123,7 @@ class ParticleGame:
             # Composite to CPU surface, then crop/scale and upload as texture
             cpu_layer = pygame.Surface((self.game_width, self.height), pygame.SRCALPHA)
             cpu_layer.fill((20, 20, 20, 255))
+            self.blocks_system.draw(cpu_layer)
             self.metal_system.draw(cpu_layer)
             self.sand_system.draw(cpu_layer)
             self.water_system.draw(cpu_layer)
@@ -1139,6 +1163,13 @@ class ParticleGame:
                 m_pts_offset = [(x + self.sidebar_width, y) for (x, y) in m_points]
                 self.renderer.draw_color = (m_color[0], m_color[1], m_color[2], 255)
                 self.renderer.draw_points(m_pts_offset)
+
+            # Blocks: single color points
+            bl_color, bl_points = self.blocks_system.get_point_groups()
+            if bl_points:
+                bl_pts_offset = [(x + self.sidebar_width, y) for (x, y) in bl_points]
+                self.renderer.draw_color = (bl_color[0], bl_color[1], bl_color[2], 255)
+                self.renderer.draw_points(bl_pts_offset)
 
             # Oil: may return grouped colors (normal/burning)
             oil_groups = self.oil_system.get_point_groups() if hasattr(self, 'oil_system') else None
@@ -1201,6 +1232,7 @@ class ParticleGame:
         if (self._stats_cache_tex is None) or (now - self._stats_updated_at > 0.25):
             self._stats_updated_at = now
             parts = [
+                f"Blocks: {self.blocks_system.get_particle_count()}",
                 f"Metal: {self.metal_system.get_particle_count()}",
                 f"Sand: {self.sand_system.get_particle_count()}",
                 f"Water: {self.water_system.get_particle_count()}",
@@ -1269,6 +1301,11 @@ class ParticleGame:
                 self._ui_oil_tex = Texture.from_surface(self.renderer, self.ui_oil_surf)
             except Exception:
                 self._ui_oil_tex = None
+        if self._ui_blocks_tex is None and hasattr(self, 'ui_blocks_surf'):
+            try:
+                self._ui_blocks_tex = Texture.from_surface(self.renderer, self.ui_blocks_surf)
+            except Exception:
+                self._ui_blocks_tex = None
 
     def _draw_overlays_cpu(self):
         # Icon button: 50% transparent black box with icon image
@@ -1355,6 +1392,23 @@ class ParticleGame:
                 ly = rect.bottom + 6
                 self.screen.blit(label_surf, (lx, ly))
 
+        # Blocks drag preview rectangle (drawn over the world)
+        if self.current_tool == "blocks" and self.blocks_drag_active and self.blocks_drag_start and self.blocks_drag_current:
+            (sx, sy) = self.blocks_drag_start
+            (cx, cy) = self.blocks_drag_current
+            # Convert world to view space
+            v1x, v1y = self.camera.world_to_view(sx, sy)
+            v2x, v2y = self.camera.world_to_view(cx, cy)
+            x = self.sidebar_width + min(v1x, v2x)
+            y = min(v1y, v2y)
+            w = abs(v2x - v1x)
+            h = abs(v2y - v1y)
+            # Semi-transparent fill and border
+            preview = pygame.Surface((max(1, w), max(1, h)), pygame.SRCALPHA)
+            preview.fill((100, 150, 255, 50))
+            self.screen.blit(preview, (x, y))
+            pygame.draw.rect(self.screen, (100, 160, 255), pygame.Rect(x, y, w, h), 1)
+
     def _draw_overlays_gpu(self):
         self._ensure_ui_textures()
         # Icon button box
@@ -1420,7 +1474,7 @@ class ParticleGame:
                 self.renderer.draw_rect(sdl2rect.Rect(rect.x, rect.y, rect.w, rect.h))
 
                 surf = tile.get("surf")
-                if surf is not None and tile["key"] in ("water", "sand", "oil", "lava", "toxic", "npc"):
+                if surf is not None and tile["key"] in ("water", "sand", "oil", "lava", "toxic", "npc", "blocks"):
                     iw, ih = surf.get_size()
                     pad = 8
                     dest_w = max(1, rect.w - 2 * pad)
@@ -1444,6 +1498,8 @@ class ParticleGame:
                         tex = self._ui_npc_tex
                     elif tile["key"] == "toxic":
                         tex = self._ui_toxic_tex
+                    elif tile["key"] == "blocks":
+                        tex = self._ui_blocks_tex
                     if tex:
                         self.renderer.copy(tex, dstrect=sdl2rect.Rect(dx, dy, w, h))
                     else:
@@ -1469,6 +1525,19 @@ class ParticleGame:
                 lx = rect.x + (rect.w - label_surf.get_width()) // 2
                 ly = rect.bottom + 6
                 self.renderer.copy(label_tex, dstrect=sdl2rect.Rect(lx, ly, label_surf.get_width(), label_surf.get_height()))
+        # Blocks drag preview rectangle (GPU)
+        if self.current_tool == "blocks" and self.blocks_drag_active and self.blocks_drag_start and self.blocks_drag_current:
+            (sx, sy) = self.blocks_drag_start
+            (cx, cy) = self.blocks_drag_current
+            v1x, v1y = self.camera.world_to_view(sx, sy)
+            v2x, v2y = self.camera.world_to_view(cx, cy)
+            x = self.sidebar_width + min(v1x, v2x)
+            y = min(v1y, v2y)
+            w = abs(v2x - v1x)
+            h = abs(v2y - v1y)
+            # Border
+            self.renderer.draw_color = (100, 160, 255, 255)
+            self.renderer.draw_rect(sdl2rect.Rect(x, y, w, h))
     
     def run(self):
         """Main game loop"""
