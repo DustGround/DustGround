@@ -19,6 +19,7 @@ from src.zoom import Camera
 from src.admin import clear_everything
 from src.bg import GridBackground
 from src.menu import MainMenu
+from src.settings import load_settings, save_settings
 
 # Detect GPU API availability once; the decision to USE it is based on benchmark config
 GPU_AVAILABLE = False
@@ -91,7 +92,15 @@ class ParticleGame:
         self.grid_bg = GridBackground()
         # Main menu (shown on launch)
         self.show_main_menu = True
-        self.menu = MainMenu()
+        # Load user settings and apply
+        self.user_settings = load_settings()
+        # Defaults for flags used by app
+        self.show_grid = bool(self.user_settings.get("show_grid", True))
+        self.invert_zoom = bool(self.user_settings.get("invert_zoom", False))
+        # Apply immediate settings (target_fps, max_particles, volume)
+        self._apply_user_settings(self.user_settings)
+        # Create menu with settings callback
+        self.menu = MainMenu(on_settings_change=self._on_menu_settings_change, initial_settings=self.user_settings)
         
         # Current tool selection
         self.current_tool = "sand"  # "sand" or "water"
@@ -214,6 +223,35 @@ class ParticleGame:
         tex = Texture.from_surface(self.renderer, surf)
         self._text_cache[key] = tex
         return tex
+
+    def _on_menu_settings_change(self, new_settings: Dict):
+        """Callback from MainMenu when user updates a setting via the UI."""
+        self.user_settings.update(new_settings or {})
+        save_settings(self.user_settings)
+        self._apply_user_settings(self.user_settings)
+
+    def _apply_user_settings(self, s: Dict):
+        # Target FPS and particle cap
+        tfps = int(s.get("target_fps", self.target_fps))
+        if tfps > 0:
+            self.target_fps = tfps
+        self.max_particles = int(s.get("max_particles", self.max_particles))
+        # Show grid flag
+        self.show_grid = bool(s.get("show_grid", True))
+        # Zoom inversion
+        self.invert_zoom = bool(s.get("invert_zoom", False))
+        # Master volume (best effort)
+        vol = int(s.get("master_volume", 100))
+        try:
+            if not pygame.mixer.get_init():
+                try:
+                    pygame.mixer.init()
+                except Exception:
+                    pass
+            if pygame.mixer.get_init():
+                pygame.mixer.music.set_volume(max(0.0, min(1.0, vol / 100.0)))
+        except Exception:
+            pass
 
     def _load_image(self, rel_path: str):
         """Load an image robustly from several candidate locations.
@@ -463,9 +501,11 @@ class ParticleGame:
                         vx = mx - self.sidebar_width
                         # Plus (main) or equals (often shift+'+') or keypad plus
                         if event.key in (getattr(pygame, 'K_PLUS', pygame.K_EQUALS), pygame.K_EQUALS, pygame.K_KP_PLUS):
-                            self.camera.zoom_at(1.1, vx, my)
+                            scale = 1.1 if not self.invert_zoom else 1.0/1.1
+                            self.camera.zoom_at(scale, vx, my)
                         elif event.key in (pygame.K_MINUS, pygame.K_KP_MINUS):
-                            self.camera.zoom_at(1.0/1.1, vx, my)
+                            scale = 1.0/1.1 if not self.invert_zoom else 1.1
+                            self.camera.zoom_at(scale, vx, my)
                 elif event.key == pygame.K_UP:
                     self.brush_size = min(20, self.brush_size + 1)
                 elif event.key == pygame.K_DOWN:
@@ -1155,7 +1195,7 @@ class ParticleGame:
                 game_surface = self._game_surface
                 game_surface.fill((20, 20, 20))
                 # Background grid (CPU path)
-                if hasattr(self, 'grid_bg') and hasattr(self, 'camera'):
+                if getattr(self, 'show_grid', True) and hasattr(self, 'grid_bg') and hasattr(self, 'camera'):
                     self.grid_bg.draw_cpu(game_surface, self.camera)
                 # Draw particles (CPU path)
                 self.blocks_system.draw(game_surface)
@@ -1229,8 +1269,8 @@ class ParticleGame:
                 self.menu.draw_gpu(self.renderer)
             self.renderer.present()
             return
-        if hasattr(self, 'grid_bg') and hasattr(self, 'camera'):
-            self.grid_bg.draw_gpu(self.renderer, (self.sidebar_width, 0, self.game_width, self.height), self.camera)
+            if getattr(self, 'show_grid', True) and hasattr(self, 'grid_bg') and hasattr(self, 'camera'):
+                self.grid_bg.draw_gpu(self.renderer, (self.sidebar_width, 0, self.game_width, self.height), self.camera)
         use_cpu_composite = getattr(self, 'camera', None) and not self.camera.is_identity()
         if use_cpu_composite:
             # Composite to CPU surface, then crop/scale and upload as texture
@@ -1789,7 +1829,14 @@ class ParticleGame:
             if (not self.ready) and self._bench_done:
                 # Apply cfg and (re)create renderer if needed
                 self.opt = self._bench_cfg or {}
-                self.use_gpu = bool(self.opt.get("use_gpu", GPU_AVAILABLE) and GPU_AVAILABLE)
+                # Prefer user renderer preference if set; otherwise fallback to optimization suggestion
+                pref = str(self.user_settings.get("renderer", "Auto")).lower() if hasattr(self, 'user_settings') else "auto"
+                if pref == "cpu":
+                    self.use_gpu = False
+                elif pref == "gpu":
+                    self.use_gpu = bool(GPU_AVAILABLE)
+                else:
+                    self.use_gpu = bool(self.opt.get("use_gpu", GPU_AVAILABLE) and GPU_AVAILABLE)
                 self.target_fps = int(self.opt.get("target_fps", 60))
                 self.max_particles = int(self.opt.get("max_particles", 50000))
 
