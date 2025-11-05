@@ -7,6 +7,11 @@ from types import ModuleType
 from typing import Dict
 
 from .pluginmain import get_service
+try:
+    # Make active game available to DgPy before plugin init
+    from DgPy.core import set_game as _dgpy_set_game
+except Exception:  # pragma: no cover
+    _dgpy_set_game = None
 
 _loaded: Dict[str, ModuleType] = {}
 
@@ -24,6 +29,12 @@ def load_enabled_plugins(game) -> None:
     If the module exposes init(game) or register(game), it will be called.
     """
     service = get_service()
+    # Provide active game to DgPy so plugins can immediately register content
+    try:
+        if callable(_dgpy_set_game):
+            _dgpy_set_game(game)
+    except Exception:
+        pass
     for p in service.get_plugins():
         if not p.enabled:
             continue

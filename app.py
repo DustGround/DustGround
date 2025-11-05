@@ -444,12 +444,10 @@ class ParticleGame:
                             self.ui_show_spawn = False
                         continue
                     if self.ui_show_spawn and self.ui_menu_rect.collidepoint(mx, my):
-                        # Handle clicks on any tile
+                        # Handle clicks on any tile (includes plugin-registered tools)
                         for key, rect in getattr(self, 'ui_tile_rects', {}).items():
                             if rect.collidepoint(mx, my):
-                                # Only allow known tools (blood is hazard-only, not paintable)
-                                if key in ("sand", "water", "oil", "lava", "metal", "toxic", "npc", "blocks"):
-                                    self.current_tool = key
+                                self.current_tool = key
                                 break
                         continue
                     # Admin panel button click
@@ -727,6 +725,17 @@ class ParticleGame:
                 p.pos[1] = float(game_y)
                 p.prev[0] = float(game_x)
                 p.prev[1] = float(game_y)
+        else:
+            # Plugin-registered custom tool
+            try:
+                from DgPy.core import get_tools
+                tools = get_tools()
+                if self.current_tool in tools:
+                    spawn = tools[self.current_tool].get("spawn")
+                    if callable(spawn):
+                        spawn(self, int(game_x), int(game_y), int(self.brush_size))
+            except Exception:
+                pass
     
     def _handle_cross_material_collisions(self):
         """Handle collisions between materials (sand, water, lava)."""
@@ -1790,7 +1799,7 @@ class ParticleGame:
                 self.renderer.fill_rect(sdl2rect.Rect(rect.x, rect.y, rect.w, rect.h))
 
                 surf = tile.get("surf")
-                if surf is not None and tile["key"] in ("water", "sand", "oil", "lava", "toxic", "npc", "blocks"):
+                if surf is not None:
                     iw, ih = surf.get_size()
                     pad = 8
                     dest_w = max(1, rect.w - 2 * pad)
