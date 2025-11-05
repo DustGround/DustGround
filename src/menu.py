@@ -6,6 +6,7 @@ import math
 import time
 
 import pygame
+from src.pluginman.pluginmenu import PluginMenuPanel
 
 try:
     from pygame._sdl2.video import Texture  # type: ignore
@@ -59,7 +60,7 @@ class MainMenu:
         self.accent_outline = (100, 130, 170)
         # Cache for GPU text textures (keyed by (text, color))
         self._text_cache = {}
-        # About labels; 'barrier' indicates an empty line
+    # About labels; 'barrier' indicates an empty line
         self.about_lines: List[str] = [
             "Dust Grounds by Impnet Studios",
             "barrier",
@@ -121,14 +122,8 @@ class MainMenu:
         self._opt_hit = {"tabs": [], "items": {}}  # tabs: [(rect, idx)], items: {(tab,i): {...}}
         self._drag_slider = None  # {'tab':int,'item':int,'track':Rect,'min':int,'max':int,'step':int}
         self._hover_tooltip = None
-        # Plugins placeholder content
-        self.plugins_lines = [
-            "Plugins",
-            "barrier",
-            "No plugins installed.",
-            "barrier",
-            "Coming soon: plugin browser and loader.",
-        ]
+        # Plugins UI panel
+        self.plugin_panel = PluginMenuPanel()
         self.back_label = "Back"
 
         # Apply initial settings to UI state (map values onto items)
@@ -352,17 +347,22 @@ class MainMenu:
             return None
 
         # Simple sub-pages (About/Plugins): Enter or right-click to go back
-        if self.state in ("about", "plugins"):
-            if event.type == pygame.KEYDOWN:
-                if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            if self.state == "plugins":
+                res = self.plugin_panel.handle_event(event)
+                if res == "back":
+                    self.state = "main"
+                return None
+            if self.state == "about":
+                if event.type == pygame.KEYDOWN:
+                    if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                        self.state = "main"
+                        return None
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
                     self.state = "main"
                     return None
-            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
-                self.state = "main"
+                elif event.type == pygame.MOUSEWHEEL:
+                    return None
                 return None
-            elif event.type == pygame.MOUSEWHEEL:
-                return None
-            return None
 
         # Main menu input
         if event.type == pygame.KEYDOWN:
@@ -512,10 +512,14 @@ class MainMenu:
         width, height = screen.get_size()
         center_y = height // 2
         # Sub-page screens
-        if self.state in ("about", "plugins"):
+        if self.state == "plugins":
+            # Draw plugin management panel
+            self.plugin_panel.draw_cpu(screen)
+            return
+        if self.state == "about":
             spacing = self.item_font.get_height() + 10
             # Count lines including barriers
-            lines = self.about_lines if self.state == "about" else self.plugins_lines
+            lines = self.about_lines
             lines_count = len(lines)
             # Compute starting Y so content is roughly centered vertically
             items_h = lines_count * spacing + 40  # extra space for Back button
@@ -544,7 +548,7 @@ class MainMenu:
             uy = by + back_surf.get_height() + 6
             pygame.draw.rect(screen, (200, 200, 200), (ux, uy, under_w, under_h))
             return
-        # Options screen (two-pane)
+    # Options screen (two-pane)
         if self.state == "options":
             # Dimensions & panels
             title_surf = self.title_font.render("settings", True, (230, 230, 230))
@@ -685,7 +689,7 @@ class MainMenu:
             hint_surf = self.item_font.render(hint, True, (140, 140, 140))
             screen.blit(hint_surf, (left_margin, height - 44))
             return
-        # Items
+    # Items
         # Dynamic spacing based on font height
         spacing = self.item_font.get_height() + 12
         items_h = len(self.options) * spacing
@@ -722,7 +726,11 @@ class MainMenu:
     def draw_gpu(self, renderer, left_margin: int = 64) -> None:
         # Title
         # Sub-page screens
-        if self.state in ("about", "plugins"):
+        if self.state == "plugins":
+            # Draw plugin panel on GPU
+            self.plugin_panel.draw_gpu(renderer)
+            return
+        if self.state in ("about",):
             if Texture is None or sdl2rect is None:
                 return
             spacing = self.item_font.get_height() + 10

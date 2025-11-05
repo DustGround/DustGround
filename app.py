@@ -19,7 +19,10 @@ from src.zoom import Camera
 from src.admin import clear_everything
 from src.bg import GridBackground
 from src.menu import MainMenu
+from src.pause import PauseMenu
 from src.settings import load_settings, save_settings
+from src.pluginman.pluginmain import start_plugin_service
+from src.pluginman import pluginload
 
 # Detect GPU API availability once; the decision to USE it is based on benchmark config
 GPU_AVAILABLE = False
@@ -92,6 +95,8 @@ class ParticleGame:
         self.grid_bg = GridBackground()
         # Main menu (shown on launch)
         self.show_main_menu = True
+        # Pause menu state
+        self.show_pause_menu = False
         # Load user settings and apply
         self.user_settings = load_settings()
         # Defaults for flags used by app
@@ -101,6 +106,13 @@ class ParticleGame:
         self._apply_user_settings(self.user_settings)
         # Create menu with settings callback
         self.menu = MainMenu(on_settings_change=self._on_menu_settings_change, initial_settings=self.user_settings)
+        # Create pause menu (visual match to main menu)
+        self.pause_menu = PauseMenu()
+        # Start plugin service (zip watcher)
+        try:
+            start_plugin_service(Path.cwd())
+        except Exception:
+            pass
         
         # Current tool selection
         self.current_tool = "sand"  # "sand" or "water"
@@ -366,6 +378,11 @@ class ParticleGame:
                 action = self.menu.handle_event(event)
                 if action == "play":
                     self.show_main_menu = False
+                    # Load enabled plugins once entering the sandbox
+                    try:
+                        pluginload.load_enabled_plugins(self)
+                    except Exception:
+                        pass
                     # Reset camera state on entering game
                     if hasattr(self, 'camera') and self.camera:
                         self.camera.scale = 1.0
@@ -375,6 +392,32 @@ class ParticleGame:
                 elif action == "quit":
                     return False
                 # While menu is showing, consume other events
+                continue
+            # If pause menu is visible, route input there next
+            if getattr(self, 'show_pause_menu', False):
+                if event.type == pygame.QUIT:
+                    return False
+                if event.type == pygame.VIDEORESIZE:
+                    self._apply_resize(event.w, event.h)
+                    continue
+                action = self.pause_menu.handle_event(event)
+                if action == "resume":
+                    self.show_pause_menu = False
+                    continue
+                if action == "exit":
+                    # Return to main menu instead of quitting
+                    self.show_pause_menu = False
+                    self.show_main_menu = True
+                    # Optionally reset camera/game UI states when returning to menu
+                    if hasattr(self, 'camera') and self.camera:
+                        self.camera.scale = 1.0
+                        self.camera.off_x = 0.0
+                        self.camera.off_y = 0.0
+                    # Hide overlay panels
+                    self.ui_show_spawn = False
+                    setattr(self, 'ui_show_admin', False)
+                    continue
+                # Consume other events while paused
                 continue
             if event.type == pygame.QUIT:
                 return False
@@ -492,7 +535,9 @@ class ParticleGame:
                     
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
-                    return False
+                    # In sandbox, ESC opens pause menu (does nothing on main menu handled above)
+                    self.show_pause_menu = True
+                    continue
                 # Zoom controls when holding CTRL
                 mods = pygame.key.get_mods()
                 if mods & pygame.KMOD_CTRL:
@@ -1029,6 +1074,15 @@ class ParticleGame:
             if hasattr(self, 'clock'):
                 self.fps = int(self.clock.get_fps())
             return
+        # Pause menu: pause simulation updates
+        if getattr(self, 'show_pause_menu', False):
+            if hasattr(self, 'pause_menu'):
+                self.pause_menu.update()
+            # Maintain FPS counters but skip simulation
+            self._frame_index += 1
+            if hasattr(self, 'clock'):
+                self.fps = int(self.clock.get_fps())
+            return
         self._draw_on_canvas()
         
         # During loading screen, skip updates
@@ -1158,7 +1212,7 @@ class ParticleGame:
         size_tex = self._get_text_texture(size_label, (200, 200, 200))
         self.renderer.copy(size_tex, dstrect=sdl2rect.Rect(10, 220, size_surf.get_width(), size_surf.get_height()))
 
-        info_lines = ["UP/DOWN: Size", "ESC: Quit"]
+        info_lines = ["UP/DOWN: Size", "ESC: Pause"]
         y = 250
         for line in info_lines:
             info_surf = self.button_font.render(line, True, (150, 150, 150))
@@ -1227,6 +1281,15 @@ class ParticleGame:
                     self.screen.blit(game_surface, (self.sidebar_width, 0))
                 # Overlay UI
                 self._draw_overlays_cpu()
+                # Pause overlay
+                if getattr(self, 'show_pause_menu', False):
+                    # Dim full screen
+                    dim = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+                    dim.fill((0, 0, 0, 140))
+                    self.screen.blit(dim, (0, 0))
+                    # Draw pause menu
+                    if hasattr(self, 'pause_menu'):
+                        self.pause_menu.draw_cpu(self.screen)
                 # Throttle stats update
                 now = time.time()
                 if now - self._stats_updated_at > 0.25:
@@ -1382,6 +1445,15 @@ class ParticleGame:
 
         # Overlay UI
         self._draw_overlays_gpu()
+
+        # Pause overlay (GPU)
+        if getattr(self, 'show_pause_menu', False):
+            # Dim background
+            self.renderer.draw_color = (0, 0, 0, 140)
+            self.renderer.fill_rect(sdl2rect.Rect(0, 0, self.width, self.height))
+            # Draw pause menu
+            if hasattr(self, 'pause_menu'):
+                self.pause_menu.draw_gpu(self.renderer)
 
         # Stats text (throttled)
         now = time.time()
