@@ -11,6 +11,11 @@ class Block:
         self.h = int(max(1, h))
         self.vx = 0.0
         self.vy = 0.0
+        # True when resting on something (ground or another block) after resolution
+        self.grounded = False
+        # Previous-frame position for CCD-like sweep tests
+        self.px = float(self.x)
+        self.py = float(self.y)
 
     @property
     def rect(self) -> pygame.Rect:
@@ -117,45 +122,125 @@ class BlocksSystem:
                 b.x = float(int(b.x))
                 b.vx = 0.0
 
+    def _resolve_pair(self, bi: Block, bj: Block) -> bool:
+        """Resolve collision between two blocks with stacking-friendly logic.
+        Returns True if a resolution was applied.
+        """
+        ri = bi.rect
+        rj = bj.rect
+        if not ri.colliderect(rj):
+            return False
+
+        # Compute overlaps along axes
+        overlap_left = rj.right - ri.left
+        overlap_right = ri.right - rj.left
+        overlap_top = rj.bottom - ri.top
+        overlap_bottom = ri.bottom - rj.top
+
+        sep_x = overlap_left if overlap_left < overlap_right else -overlap_right
+        sep_y = overlap_top if overlap_top < overlap_bottom else -overlap_bottom
+
+        resolved = False
+
+        # Prefer vertical when falling or when vertical overlap is similar to horizontal
+        prefer_vertical = abs(sep_y) <= abs(sep_x) or bi.vy > 0.05 or bj.vy < -0.05
+        if prefer_vertical:
+            # Prefer resolving vertically for stacking stability
+            # Determine who is on top based on centers
+            if ri.centery <= rj.centery:
+                # bi is above bj -> snap bi to top of bj
+                target_y = bj.y - bi.h
+                if bi.y > target_y - 0.001:
+                    bi.y = float(target_y)
+                else:
+                    bi.y = float(target_y)
+                # If falling, stop vertical velocity and mark grounded
+                if bi.vy > 0:
+                    bi.vy = 0.0
+                bi.grounded = True
+                # Apply horizontal friction on landing to reduce jitter
+                bi.vx *= (1 - min(1.0, self.friction * 4))
+            else:
+                # bi is below bj -> snap bi under bj
+                target_y = bj.y + bj.h
+                bi.y = float(target_y)
+                if bi.vy < 0:
+                    bi.vy = 0.0
+            resolved = True
+        else:
+            # Horizontal resolution: push away along X, damp vx (side bump)
+            if ri.centerx <= rj.centerx:
+                # bi is left of bj
+                target_x = bj.x - bi.w
+                bi.x = float(target_x)
+                if bi.vx > 0:
+                    bi.vx *= -self.bounce  # small bounce to separate
+            else:
+                # bi is right of bj
+                target_x = bj.x + bj.w
+                bi.x = float(target_x)
+                if bi.vx < 0:
+                    bi.vx *= -self.bounce
+            # Additional friction to settle stacks
+            bi.vx *= (1 - min(1.0, self.friction * 2))
+            resolved = True
+
+        return resolved
+
     def _collide_blocks(self):
-        # Simple pairwise AABB resolution; stable for small counts
+        """Iteratively resolve block-vs-block collisions for stable stacks."""
         n = len(self.blocks)
+        if n <= 1:
+            return
+        # First, continuous-like vertical sweep to catch pass-throughs between frames
         for i in range(n):
             bi = self.blocks[i]
             ri = bi.rect
-            for j in range(i + 1, n):
+            prev_bottom = int(bi.py) + bi.h
+            curr_bottom = ri.bottom
+            for j in range(n):
+                if i == j:
+                    continue
                 bj = self.blocks[j]
                 rj = bj.rect
-                if not ri.colliderect(rj):
+                # Only consider downward motion of bi passing a top face of bj
+                if bi.vy <= 0:
                     continue
-                # Minimum translation along axis
-                dx1 = rj.right - ri.left
-                dx2 = ri.right - rj.left
-                dy1 = rj.bottom - ri.top
-                dy2 = ri.bottom - rj.top
-                # Choose smallest magnitude separation
-                sep_x = dx1 if dx1 < dx2 else -dx2
-                sep_y = dy1 if dy1 < dy2 else -dy2
-                if abs(sep_x) < abs(sep_y):
-                    # Separate horizontally
-                    move = sep_x / 2.0
-                    bi.x -= move
-                    bj.x += move
-                    bi.vx *= (1 - self.friction)
-                    bj.vx *= (1 - self.friction)
-                else:
-                    move = sep_y / 2.0
-                    bi.y -= move
-                    bj.y += move
-                    bi.vy *= (1 - self.friction)
-                    bj.vy *= (1 - self.friction)
-                # Update rects after adjustment
-                ri = bi.rect
-                rj = bj.rect
+                top_face = rj.top
+                # Check if bottom swept across the top face between frames
+                if prev_bottom <= top_face < curr_bottom:
+                    # Horizontal overlap?
+                    if (ri.right > rj.left) and (ri.left < rj.right):
+                        bi.y = float(bj.y - bi.h)
+                        bi.vy = 0.0
+                        bi.grounded = True
+                        # Update rect for later passes
+                        ri = bi.rect
+                        curr_bottom = ri.bottom
+        
+        # Run a few passes to propagate corrections through stacks
+        max_passes = 4
+        for _ in range(max_passes):
+            any_resolved = False
+            for i in range(n):
+                bi = self.blocks[i]
+                for j in range(i + 1, n):
+                    bj = self.blocks[j]
+                    # Resolve in both orders to bias moving the likely intruder first
+                    r1 = self._resolve_pair(bi, bj)
+                    r2 = self._resolve_pair(bj, bi)
+                    if r1 or r2:
+                        any_resolved = True
+            if not any_resolved:
+                break
 
     def update(self, frame_index: int = 0):
         # Integrate motion
         for b in self.blocks:
+            # Store previous position for sweep tests
+            b.px = b.x
+            b.py = b.y
+            b.grounded = False
             b.vy += self.gravity
             b.vx *= (1 - self.friction)
             if abs(b.vx) < 0.01:
@@ -165,6 +250,15 @@ class BlocksSystem:
             self._collide_bounds(b)
         # Resolve inter-block collisions
         self._collide_blocks()
+        # Dampen tiny velocities when grounded to avoid jitter
+        for b in self.blocks:
+            if b.grounded:
+                if abs(b.vy) < 0.05:
+                    b.vy = 0.0
+                if abs(b.vx) < 0.02:
+                    b.vx = 0.0
+                # Micro-snap to pixel grid to stabilize resting
+                b.y = float(int(round(b.y)))
         # External solids (e.g., metal) resolution
         for b in self.blocks:
             self._collide_external(b)
