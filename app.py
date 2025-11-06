@@ -1,3 +1,5 @@
+import os
+os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
 import pygame
 import sys
 import threading
@@ -16,15 +18,15 @@ from src.npc import NPC
 from src.opt import get_or_create_optimizations
 from src.scaling import recommend_settings
 from src.zoom import Camera
-from src.admin import clear_everything
+from src.admin import clear_everything, clear_living
 from src.bg import GridBackground
 from src.menu import MainMenu
 from src.pause import PauseMenu
 from src.settings import load_settings, save_settings
-from src.pluginman.pluginmain import start_plugin_service
+from src.pluginman.pluginmain import start_plugin_service, get_service
 from src.pluginman import pluginload
-
-# Detect GPU API availability once; the decision to USE it is based on benchmark config
+from src import discord as dg_discord
+from src import sound as sfx
 GPU_AVAILABLE = False
 try:
     from pygame._sdl2.video import Window, Renderer, Texture
@@ -33,24 +35,16 @@ try:
 except Exception:
     GPU_AVAILABLE = False
 
-
 class ParticleGame:
-    """Main game class for the 2D particle physics simulation"""
-    
-    def __init__(self, width: int = 1200, height: int = 800):
-        pygame.init()
 
+    def __init__(self, width: int=1200, height: int=800):
+        pygame.init()
         self.width = width
         self.height = height
-        # No sidebar; full width is game area
         self.sidebar_width = 0
         self.game_width = width
-
-        # Show black CPU window immediately
         self.screen = pygame.display.set_mode((width, height), pygame.RESIZABLE | pygame.DOUBLEBUF)
-        pygame.display.set_caption("Dustground")
-
-        # Defer benchmark and final renderer selection to background thread
+        pygame.display.set_caption('Dustground')
         self.ready = False
         self._bench_done = False
         self._bench_cfg = None
@@ -62,13 +56,10 @@ class ParticleGame:
             cfg = get_or_create_optimizations((self.game_width, self.height))
             self._bench_cfg = cfg
             self._bench_done = True
-
         threading.Thread(target=_bench_job, daemon=True).start()
         self.clock = pygame.time.Clock()
         self.font = pygame.font.Font(None, 14)
         self.button_font = pygame.font.Font(None, 12)
-        
-        # Particle systems
         self.sand_system = SandSystem(self.game_width, height)
         self.water_system = WaterSystem(self.game_width, height)
         self.lava_system = LavaSystem(self.game_width, height)
@@ -77,7 +68,7 @@ class ParticleGame:
         self.metal_system = MetalSystem(self.game_width, height)
         self.blood_system = BloodSystem(self.game_width, height)
         self.blocks_system = BlocksSystem(self.game_width, height)
-        # Provide combined obstacle query (metal + blocks) to particle systems
+
         def _is_solid_obstacle(x: int, y: int) -> bool:
             return self.metal_system.is_solid(x, y) or self.blocks_system.is_solid(x, y)
         self._is_solid_obstacle = _is_solid_obstacle
@@ -87,93 +78,69 @@ class ParticleGame:
         self.toxic_system.set_obstacle_query(self._is_solid_obstacle)
         self.oil_system.set_obstacle_query(self._is_solid_obstacle)
         self.blood_system.set_obstacle_query(self._is_solid_obstacle)
-        # Let blocks avoid sinking into metal
         self.blocks_system.set_external_obstacle(self.metal_system.is_solid)
-        # Camera for pan/zoom inside game area
         self.camera = Camera(world_w=self.game_width, world_h=self.height, view_w=self.game_width, view_h=self.height)
-        # Background grid renderer
         self.grid_bg = GridBackground()
-        # Main menu (shown on launch)
         self.show_main_menu = True
-        # Pause menu state
         self.show_pause_menu = False
-        # Load user settings and apply
         self.user_settings = load_settings()
-        # Defaults for flags used by app
-        self.show_grid = bool(self.user_settings.get("show_grid", True))
-        self.invert_zoom = bool(self.user_settings.get("invert_zoom", False))
-        # Apply immediate settings (target_fps, max_particles, volume)
+        self.show_grid = bool(self.user_settings.get('show_grid', True))
+        self.invert_zoom = bool(self.user_settings.get('invert_zoom', False))
         self._apply_user_settings(self.user_settings)
-        # Create menu with settings callback
         self.menu = MainMenu(on_settings_change=self._on_menu_settings_change, initial_settings=self.user_settings)
-        # Create pause menu (visual match to main menu)
         self.pause_menu = PauseMenu()
-        # Start plugin service (zip watcher)
         try:
             start_plugin_service(Path.cwd())
         except Exception:
             pass
-        
-        # Current tool selection
-        self.current_tool = "sand"  # "sand" or "water"
+        try:
+            dg_discord.init()
+        except Exception:
+            pass
+        self.current_tool = 'sand'
         self.brush_size = 5
         self.is_drawing = False
-        
-        # Overlay UI (no sidebar)
         self.buttons = {}
         self.ui_show_spawn = False
         self.ui_show_admin = False
-        # Tunable overlay sizes
         self.ui_icon_size = 56
-        # Bigger spawn menu by default
-        self.ui_menu_size = (460, 340)  # width, height
-        # Admin menu size
+        self.ui_menu_size = (460, 340)
         self.ui_admin_menu_size = (300, 160)
-        # Header height for the spawn menu (used by layout and drawing)
         self.ui_header_h = 36
-        # Grid columns for spawn tiles (horizontal row)
         self.ui_grid_cols = 4
-        # Load UI images (robust path resolution)
-        self.ui_flask_surf = self._load_image("src/assets/flask.png")
+        self.ui_flask_surf = self._load_image('src/assets/flask.png')
         if not self.ui_flask_surf:
             self.ui_flask_surf = pygame.Surface((32, 32), pygame.SRCALPHA)
             self.ui_flask_surf.fill((220, 220, 220, 255))
-        self.ui_water_surf = self._load_image("src/assets/water.png")
+        self.ui_water_surf = self._load_image('src/assets/water.png')
         if not self.ui_water_surf:
             self.ui_water_surf = pygame.Surface((64, 64), pygame.SRCALPHA)
             self.ui_water_surf.fill((80, 140, 255, 255))
-        # Sand icon (now with image support)
-        self.ui_sand_surf = self._load_image("src/assets/Sand.png")
+        self.ui_sand_surf = self._load_image('src/assets/Sand.png')
         if not self.ui_sand_surf:
             self.ui_sand_surf = pygame.Surface((64, 64), pygame.SRCALPHA)
             self.ui_sand_surf.fill((200, 180, 120, 255))
-        # Lava icon
-        self.ui_lava_surf = self._load_image("src/assets/Lava.png")
+        self.ui_lava_surf = self._load_image('src/assets/Lava.png')
         if not self.ui_lava_surf:
             self.ui_lava_surf = pygame.Surface((64, 64), pygame.SRCALPHA)
             self.ui_lava_surf.fill((255, 120, 60, 255))
-        # NPC icon
-        self.ui_npc_surf = self._load_image("src/assets/npc.png")
+        self.ui_npc_surf = self._load_image('src/assets/npc.png')
         if not self.ui_npc_surf:
             self.ui_npc_surf = pygame.Surface((64, 64), pygame.SRCALPHA)
             self.ui_npc_surf.fill((180, 180, 200, 255))
-        # Toxic waste icon
-        self.ui_toxic_surf = self._load_image("src/assets/ToxicWaste.png")
+        self.ui_toxic_surf = self._load_image('src/assets/ToxicWaste.png')
         if not self.ui_toxic_surf:
             self.ui_toxic_surf = pygame.Surface((64, 64), pygame.SRCALPHA)
             self.ui_toxic_surf.fill((90, 220, 90, 255))
-        # Oil icon
-        self.ui_oil_surf = self._load_image("src/assets/oil.png")
+        self.ui_oil_surf = self._load_image('src/assets/oil.png')
         if not self.ui_oil_surf:
             self.ui_oil_surf = pygame.Surface((64, 64), pygame.SRCALPHA)
             self.ui_oil_surf.fill((60, 50, 30, 255))
-        # Metal icon
-        self.ui_metal_surf = self._load_image("src/assets/metal.png")
+        self.ui_metal_surf = self._load_image('src/assets/metal.png')
         if not self.ui_metal_surf:
             self.ui_metal_surf = pygame.Surface((64, 64), pygame.SRCALPHA)
             self.ui_metal_surf.fill((140, 140, 150, 255))
-        # Blocks icon
-        self.ui_blocks_surf = self._load_image("src/assets/blocks.png")
+        self.ui_blocks_surf = self._load_image('src/assets/blocks.png')
         if not self.ui_blocks_surf:
             self.ui_blocks_surf = pygame.Surface((64, 64), pygame.SRCALPHA)
             self.ui_blocks_surf.fill((180, 180, 190, 255))
@@ -187,25 +154,9 @@ class ParticleGame:
         self._ui_metal_tex = None
         self._ui_blocks_tex = None
         self._ui_admin_tex = None
-
-        # Spawn menu tiles definition (order matters)
-        # For now we have an image only for water; others will render as colored tiles with labels
-        self.ui_tiles = [
-            {"key": "blocks", "label": "BLOCKS", "color": (180, 180, 190), "surf": self.ui_blocks_surf},
-            {"key": "sand", "label": "SAND", "color": (200, 180, 120), "surf": self.ui_sand_surf},
-            {"key": "water", "label": "WATER", "color": (80, 140, 255), "surf": self.ui_water_surf},
-            {"key": "oil", "label": "OIL", "color": (60, 50, 30), "surf": self.ui_oil_surf},
-            {"key": "lava", "label": "LAVA", "color": (255, 120, 60), "surf": self.ui_lava_surf},
-            {"key": "metal", "label": "METAL", "color": (140, 140, 150), "surf": self.ui_metal_surf},
-            {"key": "toxic", "label": "TOXIC", "color": (90, 220, 90), "surf": self.ui_toxic_surf},
-            {"key": "npc", "label": "NPC", "color": (180, 180, 200), "surf": self.ui_npc_surf},
-        ]
+        self.ui_tiles = [{'key': 'blocks', 'label': 'BLOCKS', 'color': (180, 180, 190), 'surf': self.ui_blocks_surf}, {'key': 'sand', 'label': 'SAND', 'color': (200, 180, 120), 'surf': self.ui_sand_surf}, {'key': 'water', 'label': 'WATER', 'color': (80, 140, 255), 'surf': self.ui_water_surf}, {'key': 'oil', 'label': 'OIL', 'color': (60, 50, 30), 'surf': self.ui_oil_surf}, {'key': 'lava', 'label': 'LAVA', 'color': (255, 120, 60), 'surf': self.ui_lava_surf}, {'key': 'metal', 'label': 'METAL', 'color': (140, 140, 150), 'surf': self.ui_metal_surf}, {'key': 'toxic', 'label': 'TOXIC', 'color': (90, 220, 90), 'surf': self.ui_toxic_surf}, {'key': 'npc', 'label': 'NPC', 'color': (180, 180, 200), 'surf': self.ui_npc_surf}]
         self.ui_tile_rects = {}
-        # Keep configured grid cols (set earlier), do not override with len(tiles)
-        # Recompute layout now that tiles are defined
         self._layout_overlay_ui()
-        
-        # FPS tracking and HUD cache
         self.fps = 0
         self._stats_cache_tex = None
         self._stats_cache_surf = None
@@ -215,21 +166,18 @@ class ParticleGame:
         self._fps_avg = 0.0
         self._last_scale_apply = 0
         self._prev_mouse = None
-        # NPC state (spawn on demand)
-        self.npc = None
+        self.npcs = []
+        self.active_npc = None
         self.npc_drag_index = None
-        # Panning state
         self._pan_active = False
         self._pan_prev = None
-        # Blocks drag creation state
         self.blocks_drag_active = False
         self.blocks_drag_start = None
         self.blocks_drag_current = None
 
-    def _get_text_texture(self, text: str, color: Tup[int, int, int]) -> "Texture":
-        """Cache and return a Texture for text rendering in GPU mode."""
+    def _get_text_texture(self, text: str, color: Tup[int, int, int]) -> 'Texture':
         key = (text, color)
-        if key in getattr(self, "_text_cache", {}):
+        if key in getattr(self, '_text_cache', {}):
             return self._text_cache[key]
         surf = self.button_font.render(text, True, color)
         tex = Texture.from_surface(self.renderer, surf)
@@ -237,23 +185,18 @@ class ParticleGame:
         return tex
 
     def _on_menu_settings_change(self, new_settings: Dict):
-        """Callback from MainMenu when user updates a setting via the UI."""
         self.user_settings.update(new_settings or {})
         save_settings(self.user_settings)
         self._apply_user_settings(self.user_settings)
 
     def _apply_user_settings(self, s: Dict):
-        # Target FPS and particle cap
-        tfps = int(s.get("target_fps", self.target_fps))
+        tfps = int(s.get('target_fps', self.target_fps))
         if tfps > 0:
             self.target_fps = tfps
-        self.max_particles = int(s.get("max_particles", self.max_particles))
-        # Show grid flag
-        self.show_grid = bool(s.get("show_grid", True))
-        # Zoom inversion
-        self.invert_zoom = bool(s.get("invert_zoom", False))
-        # Master volume (best effort)
-        vol = int(s.get("master_volume", 100))
+        self.max_particles = int(s.get('max_particles', self.max_particles))
+        self.show_grid = bool(s.get('show_grid', True))
+        self.invert_zoom = bool(s.get('invert_zoom', False))
+        vol = int(s.get('master_volume', 100))
         try:
             if not pygame.mixer.get_init():
                 try:
@@ -266,34 +209,20 @@ class ParticleGame:
             pass
 
     def _load_image(self, rel_path: str):
-        """Load an image robustly from several candidate locations.
-        Returns a Surface with per-pixel alpha or None on failure.
-        """
-        candidates = [
-            Path(rel_path),
-            Path(__file__).resolve().parent / rel_path,
-            Path(__file__).resolve().parent / rel_path.lstrip("./"),
-        ]
-        # Direct exact-path attempts first (fast path)
+        candidates = [Path(rel_path), Path(__file__).resolve().parent / rel_path, Path(__file__).resolve().parent / rel_path.lstrip('./')]
         for p in candidates:
             try:
                 if p.is_file():
                     return pygame.image.load(str(p)).convert_alpha()
             except Exception:
                 continue
-
-        # Case-insensitive fallback: search in candidate directories for a filename match ignoring case
         try:
             target = Path(rel_path).name.lower()
             dir_candidates = []
-            # Direct parent (relative to CWD)
             pr = Path(rel_path)
             dir_candidates.append(pr if pr.is_dir() else pr.parent)
-            # Parent relative to this file's directory
-            dir_candidates.append((Path(__file__).resolve().parent / (pr if pr.is_dir() else pr.parent)))
-            # Also include explicit src/assets under this file if rel_path points there
-            dir_candidates.append(Path(__file__).resolve().parent / "src" / "assets")
-
+            dir_candidates.append(Path(__file__).resolve().parent / (pr if pr.is_dir() else pr.parent))
+            dir_candidates.append(Path(__file__).resolve().parent / 'src' / 'assets')
             seen = set()
             for d in dir_candidates:
                 try:
@@ -313,62 +242,46 @@ class ParticleGame:
                         continue
         except Exception:
             pass
-
-        # Last resort: try pygame's default loader with given path
         try:
             return pygame.image.load(rel_path).convert_alpha()
         except Exception:
             return None
 
     def _layout_overlay_ui(self):
-        # Icon at top-left
         self.ui_flask_rect = pygame.Rect(10, 10, self.ui_icon_size, self.ui_icon_size)
-        # Admin icon to the right of flask
         self.ui_admin_rect = pygame.Rect(self.ui_flask_rect.right + 8, 10, self.ui_icon_size, self.ui_icon_size)
-        # Menu to the right of icon
         mw, mh = self.ui_menu_size
         self.ui_menu_rect = pygame.Rect(self.ui_flask_rect.right + 10, 10, mw, mh)
-        # Admin panel rect to the right of admin icon
         amw, amh = self.ui_admin_menu_size
         self.ui_admin_menu_rect = pygame.Rect(self.ui_admin_rect.right + 10, 10, amw, amh)
-        # Compute grid for tiles (spawn menu)
         gpad = 14
         gap = 10
         header_h = getattr(self, 'ui_header_h', 36)
         area_x = self.ui_menu_rect.x + gpad
         area_y = self.ui_menu_rect.y + header_h + gpad
         area_w = mw - 2 * gpad
-        area_h = mh - header_h - 2 * gpad - 20  # reserve some space for labels
-
-        # Dynamically pack as many columns as fit to avoid unnecessary new lines
+        area_h = mh - header_h - 2 * gpad - 20
         tiles = getattr(self, 'ui_tiles', [])
         n = len(tiles)
         min_tile_w = 48
         max_tile_w = 72
-        # How many columns can fit at minimum tile width?
         max_cols_fit = max(1, int((area_w + gap) // (min_tile_w + gap)))
         cols = max(1, min(n, max_cols_fit))
         rows = max(1, (n + cols - 1) // cols)
-        # Compute available size per tile
         tile_w_avail = max(1, (area_w - (cols - 1) * gap) // cols)
         tile_h_avail = max(1, (area_h - (rows - 1) * gap) // rows)
-        # Final tile size within bounds
         tile_w = max(min_tile_w, min(max_tile_w, tile_w_avail))
         tile_h = max(48, min(72, tile_h_avail))
-
-        # Build rects per tile in order
         self.ui_tile_rects = {}
         for idx, tile in enumerate(getattr(self, 'ui_tiles', [])):
             r = idx // cols
             c = idx % cols
             x = area_x + c * (tile_w + gap)
             y = area_y + r * (tile_h + gap)
-            self.ui_tile_rects[tile["key"]] = pygame.Rect(x, y, tile_w, tile_h)
-        
+            self.ui_tile_rects[tile['key']] = pygame.Rect(x, y, tile_w, tile_h)
+
     def handle_events(self) -> bool:
-        """Handle pygame events. Returns False if game should quit."""
         for event in pygame.event.get():
-            # If main menu is visible, route input there first
             if getattr(self, 'show_main_menu', False):
                 if event.type == pygame.QUIT:
                     return False
@@ -376,24 +289,20 @@ class ParticleGame:
                     self._apply_resize(event.w, event.h)
                     continue
                 action = self.menu.handle_event(event)
-                if action == "play":
+                if action == 'play':
                     self.show_main_menu = False
-                    # Load enabled plugins once entering the sandbox
                     try:
                         pluginload.load_enabled_plugins(self)
                     except Exception:
                         pass
-                    # Reset camera state on entering game
                     if hasattr(self, 'camera') and self.camera:
                         self.camera.scale = 1.0
                         self.camera.off_x = 0.0
                         self.camera.off_y = 0.0
                     continue
-                elif action == "quit":
+                elif action == 'quit':
                     return False
-                # While menu is showing, consume other events
                 continue
-            # If pause menu is visible, route input there next
             if getattr(self, 'show_pause_menu', False):
                 if event.type == pygame.QUIT:
                     return False
@@ -401,86 +310,97 @@ class ParticleGame:
                     self._apply_resize(event.w, event.h)
                     continue
                 action = self.pause_menu.handle_event(event)
-                if action == "resume":
+                if action == 'resume':
                     self.show_pause_menu = False
                     continue
-                if action == "exit":
-                    # Return to main menu instead of quitting
+                if action == 'exit':
                     self.show_pause_menu = False
                     self.show_main_menu = True
-                    # Optionally reset camera/game UI states when returning to menu
                     if hasattr(self, 'camera') and self.camera:
                         self.camera.scale = 1.0
                         self.camera.off_x = 0.0
                         self.camera.off_y = 0.0
-                    # Hide overlay panels
                     self.ui_show_spawn = False
                     setattr(self, 'ui_show_admin', False)
                     continue
-                # Consume other events while paused
                 continue
             if event.type == pygame.QUIT:
                 return False
-            # Handle window resize for both CPU and GPU paths
             elif event.type == pygame.VIDEORESIZE:
                 self._apply_resize(event.w, event.h)
-            # Some platforms don't emit VIDEORESIZE reliably; we'll also poll size changes each frame
-                
             elif event.type == pygame.MOUSEBUTTONDOWN:
-                if event.button == 1:  # Left click
+                if event.button == 1:
                     mx, my = event.pos
-                    # UI clicks first
                     if self.ui_flask_rect.collidepoint(mx, my):
                         self.ui_show_spawn = not self.ui_show_spawn
-                        # Hide admin if opening spawn
                         if self.ui_show_spawn:
                             setattr(self, 'ui_show_admin', False)
                         continue
                     if hasattr(self, 'ui_admin_rect') and self.ui_admin_rect.collidepoint(mx, my):
-                        # Toggle admin panel
                         self.ui_show_admin = not getattr(self, 'ui_show_admin', False)
-                        # Hide spawn if opening admin
                         if self.ui_show_admin:
                             self.ui_show_spawn = False
                         continue
                     if self.ui_show_spawn and self.ui_menu_rect.collidepoint(mx, my):
-                        # Handle clicks on any tile (includes plugin-registered tools)
                         for key, rect in getattr(self, 'ui_tile_rects', {}).items():
                             if rect.collidepoint(mx, my):
                                 self.current_tool = key
                                 break
                         continue
-                    # Admin panel button click
                     if getattr(self, 'ui_show_admin', False) and hasattr(self, 'ui_admin_menu_rect') and self.ui_admin_menu_rect.collidepoint(mx, my):
-                        # Button rect inside panel
                         if hasattr(self, 'ui_admin_clear_rect') and self.ui_admin_clear_rect and self.ui_admin_clear_rect.collidepoint(mx, my):
                             try:
                                 clear_everything(self)
                             except Exception:
-                                # Fallback inline clear
                                 try:
-                                    self.sand_system.clear(); self.water_system.clear(); self.lava_system.clear(); self.toxic_system.clear();
-                                    if hasattr(self, 'oil_system'): self.oil_system.clear()
-                                    self.metal_system.clear(); self.blood_system.clear(); self.blocks_system.clear(); self.npc = None; self.npc_drag_index = None
+                                    self.sand_system.clear()
+                                    self.water_system.clear()
+                                    self.lava_system.clear()
+                                    self.toxic_system.clear()
+                                    if hasattr(self, 'oil_system'):
+                                        self.oil_system.clear()
+                                    self.metal_system.clear()
+                                    self.blood_system.clear()
+                                    self.blocks_system.clear()
+                                    if hasattr(self, 'npcs'):
+                                        self.npcs.clear()
+                                    self.active_npc = None
+                                    self.npc_drag_index = None
                                 except Exception:
                                     pass
                             continue
-                    # If NPC tool active, start dragging nearest body part in game area
-                    if self.current_tool == "npc":
+                        if hasattr(self, 'ui_admin_clear_npcs_rect') and self.ui_admin_clear_npcs_rect and self.ui_admin_clear_npcs_rect.collidepoint(mx, my):
+                            try:
+                                clear_living(self)
+                            except Exception:
+                                try:
+                                    if hasattr(self, 'npcs'):
+                                        self.npcs.clear()
+                                    self.active_npc = None
+                                    self.npc_drag_index = None
+                                    if hasattr(self, 'npc'):
+                                        self.npc = None
+                                except Exception:
+                                    pass
+                            continue
+                    if self.current_tool == 'npc':
                         if mx >= self.sidebar_width:
                             vx = mx - self.sidebar_width
                             gx, gy = self.camera.view_to_world(vx, my)
-                            # Spawn on first click if NPC doesn't exist
-                            if self.npc is None:
-                                self.npc = NPC(gx, gy)
-                                self.npc_drag_index = self.npc.nearest_particle_index((gx, gy))
-                                self.npc.set_user_dragging(True)
+                            npc_hit, part_idx, _ = self._find_nearest_npc(gx, gy, max_dist=40)
+                            if npc_hit is not None and part_idx is not None:
+                                self.active_npc = npc_hit
+                                self.npc_drag_index = part_idx
+                                self.active_npc.set_user_dragging(True)
                                 self.is_drawing = True
                             else:
-                                self.npc_drag_index = self.npc.nearest_particle_index((gx, gy))
-                                self.npc.set_user_dragging(True)
+                                npc = NPC(gx, gy)
+                                self.npcs.append(npc)
+                                self.active_npc = npc
+                                self.npc_drag_index = npc.nearest_particle_index((gx, gy))
+                                npc.set_user_dragging(True)
                                 self.is_drawing = True
-                    elif self.current_tool == "blocks":
+                    elif self.current_tool == 'blocks':
                         if mx >= self.sidebar_width:
                             vx = mx - self.sidebar_width
                             gx, gy = self.camera.view_to_world(vx, my)
@@ -490,127 +410,111 @@ class ParticleGame:
                             self.is_drawing = True
                     else:
                         self.is_drawing = True
-                elif event.button == 3:  # Right click starts panning
+                elif event.button == 3:
                     mx, my = event.pos
                     if not (self.ui_flask_rect.collidepoint(mx, my) or (self.ui_show_spawn and self.ui_menu_rect.collidepoint(mx, my))):
                         self._pan_active = True
                         self._pan_prev = (mx, my)
-                    
             elif event.type == pygame.MOUSEBUTTONUP:
                 if event.button == 1:
                     self.is_drawing = False
-                    if self.current_tool == "npc":
+                    if self.current_tool == 'npc':
                         self.npc_drag_index = None
-                        if self.npc:
-                            self.npc.set_user_dragging(False)
-                    if self.current_tool == "blocks" and self.blocks_drag_active and self.blocks_drag_start and self.blocks_drag_current:
+                        if self.active_npc is not None:
+                            try:
+                                self.active_npc.set_user_dragging(False)
+                            except Exception:
+                                pass
+                        self.active_npc = None
+                    if self.current_tool == 'blocks' and self.blocks_drag_active and self.blocks_drag_start and self.blocks_drag_current:
                         x0, y0 = self.blocks_drag_start
                         x1, y1 = self.blocks_drag_current
                         self.blocks_system.add_block_rect(x0, y0, x1, y1)
+                        try:
+                            sfx.play_place()
+                        except Exception:
+                            pass
                         self.blocks_drag_active = False
                         self.blocks_drag_start = None
                         self.blocks_drag_current = None
                 elif event.button == 3:
                     self._pan_active = False
                     self._pan_prev = None
-
             elif event.type == pygame.MOUSEMOTION:
                 if self._pan_active and self._pan_prev is not None:
                     mx, my = event.pos
                     pmx, pmy = self._pan_prev
                     dx = mx - pmx
                     dy = my - pmy
-                    # Pan opposite to drag for natural feel
                     self.camera.pan_by(-dx, -dy)
                     self._pan_prev = (mx, my)
-                # Update blocks drag current
-                if self.current_tool == "blocks" and self.blocks_drag_active:
+                if self.current_tool == 'blocks' and self.blocks_drag_active:
                     mx, my = event.pos
                     if mx >= self.sidebar_width:
                         vx = mx - self.sidebar_width
                         gx, gy = self.camera.view_to_world(vx, my)
                         self.blocks_drag_current = (int(gx), int(gy))
-                    
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
-                    # In sandbox, ESC opens pause menu (does nothing on main menu handled above)
                     self.show_pause_menu = True
                     continue
-                # Zoom controls when holding CTRL
                 mods = pygame.key.get_mods()
                 if mods & pygame.KMOD_CTRL:
                     mx, my = pygame.mouse.get_pos()
                     if mx >= self.sidebar_width:
                         vx = mx - self.sidebar_width
-                        # Plus (main) or equals (often shift+'+') or keypad plus
                         if event.key in (getattr(pygame, 'K_PLUS', pygame.K_EQUALS), pygame.K_EQUALS, pygame.K_KP_PLUS):
-                            scale = 1.1 if not self.invert_zoom else 1.0/1.1
+                            scale = 1.1 if not self.invert_zoom else 1.0 / 1.1
                             self.camera.zoom_at(scale, vx, my)
                         elif event.key in (pygame.K_MINUS, pygame.K_KP_MINUS):
-                            scale = 1.0/1.1 if not self.invert_zoom else 1.1
+                            scale = 1.0 / 1.1 if not self.invert_zoom else 1.1
                             self.camera.zoom_at(scale, vx, my)
                 elif event.key == pygame.K_UP:
                     self.brush_size = min(20, self.brush_size + 1)
                 elif event.key == pygame.K_DOWN:
                     self.brush_size = max(1, self.brush_size - 1)
-        
         return True
-    
+
     def _handle_sidebar_click(self, pos: Tuple[int, int]) -> bool:
-        """Handle clicks on sidebar buttons. Returns True if a button was clicked."""
         x, y = pos
-        
-        # Only handle clicks in sidebar area
         if x >= self.sidebar_width:
             return False
-        
-        if self.buttons["sand"].collidepoint(pos):
-            self.current_tool = "sand"
+        if self.buttons['sand'].collidepoint(pos):
+            self.current_tool = 'sand'
             return True
-        elif self.buttons["water"].collidepoint(pos):
-            self.current_tool = "water"
+        elif self.buttons['water'].collidepoint(pos):
+            self.current_tool = 'water'
             return True
-        elif self.buttons.get("lava") and self.buttons["lava"].collidepoint(pos):
-            self.current_tool = "lava"
+        elif self.buttons.get('lava') and self.buttons['lava'].collidepoint(pos):
+            self.current_tool = 'lava'
             return True
-        elif self.buttons.get("npc") and self.buttons["npc"].collidepoint(pos):
-            self.current_tool = "npc"
+        elif self.buttons.get('npc') and self.buttons['npc'].collidepoint(pos):
+            self.current_tool = 'npc'
             return True
-        elif self.buttons["clear"].collidepoint(pos):
+        elif self.buttons['clear'].collidepoint(pos):
             self.sand_system.clear()
             self.water_system.clear()
-            # Also remove NPC if present
-            self.npc = None
+            self.npcs.clear()
+            self.active_npc = None
             self.npc_drag_index = None
             return True
-        
         return False
 
     def _compute_sidebar_width(self, w: int) -> int:
-        # Sidebar scales with window width, clamped to a sensible range
         return int(max(120, min(260, w * 0.18)))
 
     def _layout_ui(self):
-        # Layout buttons to fit current sidebar width
         margin = 10
         bw = max(100, self.sidebar_width - margin * 2)
         bh = 40
         y = 20
-        self.buttons = {
-            "sand": pygame.Rect(margin, y, bw, bh),
-            "water": pygame.Rect(margin, y + 50, bw, bh),
-            "lava": pygame.Rect(margin, y + 100, bw, bh),
-            "npc": pygame.Rect(margin, y + 150, bw, bh),
-            "clear": pygame.Rect(margin, y + 200, bw, bh),
-        }
+        self.buttons = {'sand': pygame.Rect(margin, y, bw, bh), 'water': pygame.Rect(margin, y + 50, bw, bh), 'lava': pygame.Rect(margin, y + 100, bw, bh), 'npc': pygame.Rect(margin, y + 150, bw, bh), 'clear': pygame.Rect(margin, y + 200, bw, bh)}
 
     def _apply_resize(self, new_w: int, new_h: int):
-        # Update sizes
         self.width = int(max(400, new_w))
         self.height = int(max(300, new_h))
         self.sidebar_width = 0
         self.game_width = self.width
-        # Update systems' bounds
         self.sand_system.width = self.game_width
         self.sand_system.height = self.height
         self.water_system.width = self.game_width
@@ -632,20 +536,15 @@ class ParticleGame:
         if hasattr(self, 'blood_system'):
             self.blood_system.width = self.game_width
             self.blood_system.height = self.height
-        # Recompute overlay layout
         if hasattr(self, '_layout_overlay_ui'):
             self._layout_overlay_ui()
-        # Update camera bounds and view
         if hasattr(self, 'camera') and self.camera:
             self.camera.update_view(self.game_width, self.height, self.game_width, self.height)
-        # Invalidate CPU game surface (recreated lazily)
         self._game_surface = None
-        # Resize window for CPU path
-        if (not self.use_gpu):
+        if not self.use_gpu:
             flags = pygame.RESIZABLE | pygame.DOUBLEBUF
             pygame.display.set_mode((self.width, self.height), flags)
         else:
-            # Ensure SDL2 Window is resizable and sized
             try:
                 if hasattr(self, 'window'):
                     self.window.resizable = True
@@ -654,7 +553,6 @@ class ParticleGame:
                 pass
 
     def _poll_size_change(self):
-        """Poll current window size and apply if it changed (platform-agnostic)."""
         try:
             if self.use_gpu and hasattr(self, 'window'):
                 w, h = self.window.size
@@ -663,157 +561,128 @@ class ParticleGame:
                 if not surf:
                     return
                 w, h = surf.get_size()
-            if (int(w) != self.width) or (int(h) != self.height):
+            if int(w) != self.width or int(h) != self.height:
                 self._apply_resize(int(w), int(h))
         except Exception:
             pass
-    
+
     def _draw_on_canvas(self):
-        """Draw particles when mouse is pressed"""
         if not self.is_drawing:
             return
-        
         mouse_x, mouse_y = pygame.mouse.get_pos()
-        
-        # Block drawing when cursor over overlay UI
-        if (self.ui_flask_rect.collidepoint(mouse_x, mouse_y)
-            or (getattr(self, 'ui_admin_rect', None) and self.ui_admin_rect.collidepoint(mouse_x, mouse_y))
-            or (self.ui_show_spawn and self.ui_menu_rect.collidepoint(mouse_x, mouse_y))
-            or (getattr(self, 'ui_show_admin', False) and getattr(self, 'ui_admin_menu_rect', None) and self.ui_admin_menu_rect.collidepoint(mouse_x, mouse_y))):
+        if self.ui_flask_rect.collidepoint(mouse_x, mouse_y) or (getattr(self, 'ui_admin_rect', None) and self.ui_admin_rect.collidepoint(mouse_x, mouse_y)) or (self.ui_show_spawn and self.ui_menu_rect.collidepoint(mouse_x, mouse_y)) or (getattr(self, 'ui_show_admin', False) and getattr(self, 'ui_admin_menu_rect', None) and self.ui_admin_menu_rect.collidepoint(mouse_x, mouse_y)):
             return
-        # Blocks are created on mouse release; don't stamp during drag
-        if self.current_tool == "blocks":
+        if self.current_tool == 'blocks':
             return
-        
-        # Adjust coordinates to game view then world space (camera aware)
         view_x = mouse_x - self.sidebar_width
         game_x, game_y = self.camera.view_to_world(view_x, mouse_y)
-        
-        # enforce particle cap
-        total = (
-            self.sand_system.get_particle_count()
-            + self.water_system.get_particle_count()
-            + self.oil_system.get_particle_count()
-            + self.lava_system.get_particle_count()
-            + self.toxic_system.get_particle_count()
-            + self.metal_system.get_particle_count()
-            + self.blood_system.get_particle_count()
-        )
+        total = self.sand_system.get_particle_count() + self.water_system.get_particle_count() + self.oil_system.get_particle_count() + self.lava_system.get_particle_count() + self.toxic_system.get_particle_count() + self.metal_system.get_particle_count() + self.blood_system.get_particle_count()
         if total >= self.max_particles:
-            # Still allow NPC dragging when at cap
-            if self.current_tool != "npc":
+            if self.current_tool != 'npc':
                 return
-
-        if self.current_tool == "sand":
+        placed = False
+        if self.current_tool == 'sand':
             self.sand_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
-        elif self.current_tool == "water":
+            placed = True
+        elif self.current_tool == 'water':
             self.water_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
-        elif self.current_tool == "oil":
+            placed = True
+        elif self.current_tool == 'oil':
             self.oil_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
-        elif self.current_tool == "lava":
+            placed = True
+        elif self.current_tool == 'lava':
             self.lava_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
-        elif self.current_tool == "metal":
-            # Place a filled, thick metal block
+            placed = True
+        elif self.current_tool == 'metal':
             self.metal_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
-        elif self.current_tool == "toxic":
+            placed = True
+        elif self.current_tool == 'toxic':
             self.toxic_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
-        elif self.current_tool == "npc":
-            # Drag current selected NPC particle to cursor
-            if self.npc is not None and self.npc_drag_index is not None:
-                p = self.npc.particles[self.npc_drag_index]
-                p.pos[0] = float(game_x)
-                p.pos[1] = float(game_y)
-                p.prev[0] = float(game_x)
-                p.prev[1] = float(game_y)
+            placed = True
+        elif self.current_tool == 'npc':
+            if self.active_npc is not None and self.npc_drag_index is not None:
+                try:
+                    p = self.active_npc.particles[self.npc_drag_index]
+                    p.pos[0] = float(game_x)
+                    p.pos[1] = float(game_y)
+                    p.prev[0] = float(game_x)
+                    p.prev[1] = float(game_y)
+                except Exception:
+                    pass
         else:
-            # Plugin-registered custom tool
             try:
                 from DgPy.core import get_tools
                 tools = get_tools()
                 if self.current_tool in tools:
-                    spawn = tools[self.current_tool].get("spawn")
+                    spawn = tools[self.current_tool].get('spawn')
                     if callable(spawn):
                         spawn(self, int(game_x), int(game_y), int(self.brush_size))
             except Exception:
                 pass
-    
+        if placed:
+            try:
+                sfx.play_place()
+            except Exception:
+                pass
+
     def _handle_cross_material_collisions(self):
-        """Handle collisions between materials (sand, water, lava)."""
-        # Grids were rebuilt during each system update; avoid extra rebuild here
         MAX_NEIGHBORS = 12
-        # Oil vs Water: oil floats on water (swap tendency when oil is below water)
         if getattr(self, 'oil_system', None) and self.oil_system.particles:
             for oil in self.oil_system.particles:
                 waters = self._get_nearby_water(oil.x, oil.y, radius=2)
                 if len(waters) > MAX_NEIGHBORS:
                     waters = waters[:MAX_NEIGHBORS]
                 for w in waters:
-                    if w.y > oil.y + 0.5:  # water below oil -> push oil upward, water downward
+                    if w.y > oil.y + 0.5:
                         oil.y -= 0.6
                         oil.vy -= 0.25
                         w.y += 0.3
                         w.vy += 0.12
-        # Water vs Sand: wet sand and exchange momentum
         for water in self.water_system.particles:
             sand_neighbors = self._get_nearby_sand(water.x, water.y, radius=2)
             if len(sand_neighbors) > MAX_NEIGHBORS:
                 sand_neighbors = sand_neighbors[:MAX_NEIGHBORS]
-            
             for sand in sand_neighbors:
                 dx = sand.x - water.x
                 dy = sand.y - water.y
-                dist = (dx*dx + dy*dy) ** 0.5
-                
+                dist = (dx * dx + dy * dy) ** 0.5
                 if dist < 2.5 and dist > 0.1:
-                    # Mark sand as wet
                     sand.wet = True
-                    
-                    # Water pushes sand slightly
                     nx = dx / dist if dist > 0 else 0
                     ny = dy / dist if dist > 0 else 1
-                    
                     sand.vx += nx * 0.15
                     sand.vy += ny * 0.15
-                    
-                    # Sand creates drag on water
                     water.vx -= nx * 0.1
                     water.vy -= ny * 0.1
-
-        # Lava interactions: lava destroys nearby sand/water; ignites oil
-        # Build removal sets and sweep afterwards
         sand_kill = set()
         water_kill = set()
         for lava in self.lava_system.particles:
-            # Against sand
             sands = self._get_nearby_sand(lava.x, lava.y, radius=2)
             if len(sands) > MAX_NEIGHBORS:
                 sands = sands[:MAX_NEIGHBORS]
             for s in sands:
                 dx = s.x - lava.x
                 dy = s.y - lava.y
-                d2 = dx*dx + dy*dy
-                if 0.01 < d2 < 2.5*2.5:
+                d2 = dx * dx + dy * dy
+                if 0.01 < d2 < 2.5 * 2.5:
                     sand_kill.add(id(s))
-                    # small reaction to lava
                     d = d2 ** 0.5
-                    nx, ny = dx/d, dy/d
+                    nx, ny = (dx / d, dy / d)
                     lava.vx -= nx * 0.05
                     lava.vy -= ny * 0.05
-            # Against water
             waters = self._get_nearby_water(lava.x, lava.y, radius=2)
             if len(waters) > MAX_NEIGHBORS:
                 waters = waters[:MAX_NEIGHBORS]
             for w in waters:
                 dx = w.x - lava.x
                 dy = w.y - lava.y
-                d2 = dx*dx + dy*dy
-                if 0.01 < d2 < 2.5*2.5:
+                d2 = dx * dx + dy * dy
+                if 0.01 < d2 < 2.5 * 2.5:
                     water_kill.add(id(w))
                     d = d2 ** 0.5
-                    nx, ny = dx/d, dy/d
+                    nx, ny = (dx / d, dy / d)
                     lava.vx -= nx * 0.03
                     lava.vy -= ny * 0.03
-            # Against oil: ignite quickly
             if getattr(self, 'oil_system', None) and self.oil_system.particles:
                 oils = self._get_nearby_oil(lava.x, lava.y, radius=2)
                 if len(oils) > MAX_NEIGHBORS:
@@ -821,13 +690,11 @@ class ParticleGame:
                 for o in oils:
                     dx = o.x - lava.x
                     dy = o.y - lava.y
-                    d2 = dx*dx + dy*dy
+                    d2 = dx * dx + dy * dy
                     if 0.01 < d2 <= 9.0:
                         ignite = getattr(o, 'ignite', None)
                         if ignite:
                             ignite(220)
-
-        # Sweep dead sand/water
         if sand_kill:
             for p in self.sand_system.particles:
                 if id(p) in sand_kill:
@@ -838,25 +705,20 @@ class ParticleGame:
                 if id(p) in water_kill:
                     setattr(p, 'dead', True)
             self.water_system.sweep_dead()
-    
-    def _get_nearby_sand(self, x: float, y: float, radius: int = 2) -> list:
-        """Get sand particles near a position"""
-        cell_x, cell_y = int(x // self.sand_system.cell_size), int(y // self.sand_system.cell_size)
+
+    def _get_nearby_sand(self, x: float, y: float, radius: int=2) -> list:
+        cell_x, cell_y = (int(x // self.sand_system.cell_size), int(y // self.sand_system.cell_size))
         nearby = []
-        
         for dx in range(-radius, radius + 1):
             for dy in range(-radius, radius + 1):
                 cell = (cell_x + dx, cell_y + dy)
                 if cell in self.sand_system.grid:
                     nearby.extend(self.sand_system.grid[cell])
-        
         return nearby
 
-    def _get_nearby_water(self, x: float, y: float, radius: int = 2) -> list:
-        """Get water particles near a position"""
-        cell_x, cell_y = int(x // self.water_system.cell_size), int(y // self.water_system.cell_size)
+    def _get_nearby_water(self, x: float, y: float, radius: int=2) -> list:
+        cell_x, cell_y = (int(x // self.water_system.cell_size), int(y // self.water_system.cell_size))
         nearby = []
-
         for dx in range(-radius, radius + 1):
             for dy in range(-radius, radius + 1):
                 cell = (cell_x + dx, cell_y + dy)
@@ -864,11 +726,9 @@ class ParticleGame:
                     nearby.extend(self.water_system.grid[cell])
         return nearby
 
-    def _get_nearby_lava(self, x: float, y: float, radius: int = 2) -> list:
-        """Get lava particles near a position"""
-        cell_x, cell_y = int(x // self.lava_system.cell_size), int(y // self.lava_system.cell_size)
+    def _get_nearby_lava(self, x: float, y: float, radius: int=2) -> list:
+        cell_x, cell_y = (int(x // self.lava_system.cell_size), int(y // self.lava_system.cell_size))
         nearby = []
-
         for dx in range(-radius, radius + 1):
             for dy in range(-radius, radius + 1):
                 cell = (cell_x + dx, cell_y + dy)
@@ -876,11 +736,9 @@ class ParticleGame:
                     nearby.extend(self.lava_system.grid[cell])
         return nearby
 
-    def _get_nearby_toxic(self, x: float, y: float, radius: int = 2) -> list:
-        """Get toxic particles near a position"""
-        cell_x, cell_y = int(x // self.toxic_system.cell_size), int(y // self.toxic_system.cell_size)
+    def _get_nearby_toxic(self, x: float, y: float, radius: int=2) -> list:
+        cell_x, cell_y = (int(x // self.toxic_system.cell_size), int(y // self.toxic_system.cell_size))
         nearby = []
-
         for dx in range(-radius, radius + 1):
             for dy in range(-radius, radius + 1):
                 cell = (cell_x + dx, cell_y + dy)
@@ -888,11 +746,9 @@ class ParticleGame:
                     nearby.extend(self.toxic_system.grid[cell])
         return nearby
 
-    def _get_nearby_oil(self, x: float, y: float, radius: int = 2) -> list:
-        """Get oil particles near a position"""
-        cell_x, cell_y = int(x // self.oil_system.cell_size), int(y // self.oil_system.cell_size)
+    def _get_nearby_oil(self, x: float, y: float, radius: int=2) -> list:
+        cell_x, cell_y = (int(x // self.oil_system.cell_size), int(y // self.oil_system.cell_size))
         nearby = []
-
         for dx in range(-radius, radius + 1):
             for dy in range(-radius, radius + 1):
                 cell = (cell_x + dx, cell_y + dy)
@@ -900,12 +756,28 @@ class ParticleGame:
                     nearby.extend(self.oil_system.grid[cell])
         return nearby
 
-    def _npc_particle_coupling(self):
-        """Gently couple NPC body parts with nearby particles: push particles away and apply a tiny reaction to NPC."""
-        # Assume grids are up-to-date from the latest system.update calls.
-        if not self.npc or (not self.sand_system.particles and not self.water_system.particles):
-            return
+    def _find_nearest_npc(self, x: float, y: float, max_dist: float=40.0):
+        if not getattr(self, 'npcs', None):
+            return (None, None, None)
+        best_npc = None
+        best_idx = None
+        best_d2 = max_dist * max_dist
+        for npc in self.npcs:
+            for i, p in enumerate(npc.particles):
+                dx = float(p.pos.x) - float(x)
+                dy = float(p.pos.y) - float(y)
+                d2 = dx * dx + dy * dy
+                if d2 < best_d2:
+                    best_d2 = d2
+                    best_npc = npc
+                    best_idx = i
+        if best_npc is None:
+            return (None, None, None)
+        return (best_npc, best_idx, best_d2 ** 0.5)
 
+    def _npc_particle_coupling(self):
+        if not getattr(self, 'npcs', None) or (not self.sand_system.particles and (not self.water_system.particles)):
+            return
         push_radius = 8.0
         push_r2 = push_radius * push_radius
         sand_push = 0.2
@@ -913,124 +785,90 @@ class ParticleGame:
         npc_react = 0.04
         radius_cells = 2
         max_neighbors = 10
-
-        for p in self.npc.particles:
-            px, py = p.pos
-            # Sand neighbors
-            sands = self._get_nearby_sand(px, py, radius=radius_cells)
-            if len(sands) > max_neighbors:
-                sands = sands[:max_neighbors]
-            for s in sands:
-                dx = s.x - px
-                dy = s.y - py
-                d2 = dx*dx + dy*dy
-                if d2 > push_r2 or d2 <= 0.0001:
-                    continue
-                d = d2 ** 0.5
-                nx = dx / d
-                ny = dy / d
-                s.vx += nx * sand_push
-                s.vy += ny * sand_push
-                # Reaction on NPC
-                p.pos[0] -= nx * npc_react
-                p.pos[1] -= ny * npc_react
-
-            # Water neighbors
-            waters = self._get_nearby_water(px, py, radius=radius_cells)
-            if len(waters) > max_neighbors:
-                waters = waters[:max_neighbors]
-            for w in waters:
-                dx = w.x - px
-                dy = w.y - py
-                d2 = dx*dx + dy*dy
-                if d2 > push_r2 or d2 <= 0.0001:
-                    continue
-                d = d2 ** 0.5
-                nx = dx / d
-                ny = dy / d
-                w.vx += nx * water_push
-                w.vy += ny * water_push
-                # Reaction on NPC
-                p.pos[0] -= nx * npc_react
-                p.pos[1] -= ny * npc_react
+        for npc in self.npcs:
+            for p in npc.particles:
+                px, py = p.pos
+                sands = self._get_nearby_sand(px, py, radius=radius_cells)
+                if len(sands) > max_neighbors:
+                    sands = sands[:max_neighbors]
+                for s in sands:
+                    dx = s.x - px
+                    dy = s.y - py
+                    d2 = dx * dx + dy * dy
+                    if d2 > push_r2 or d2 <= 0.0001:
+                        continue
+                    d = d2 ** 0.5
+                    nx = dx / d
+                    ny = dy / d
+                    s.vx += nx * sand_push
+                    s.vy += ny * sand_push
+                    p.pos[0] -= nx * npc_react
+                    p.pos[1] -= ny * npc_react
+                waters = self._get_nearby_water(px, py, radius=radius_cells)
+                if len(waters) > max_neighbors:
+                    waters = waters[:max_neighbors]
+                for w in waters:
+                    dx = w.x - px
+                    dy = w.y - py
+                    d2 = dx * dx + dy * dy
+                    if d2 > push_r2 or d2 <= 0.0001:
+                        continue
+                    d = d2 ** 0.5
+                    nx = dx / d
+                    ny = dy / d
+                    w.vx += nx * water_push
+                    w.vy += ny * water_push
+                    p.pos[0] -= nx * npc_react
+                    p.pos[1] -= ny * npc_react
 
     def _apply_cursor_interaction(self):
-        """Apply a gentle push to particles under the mouse, based on cursor movement.
-        Works without clicking—just moving the cursor through particles moves them.
-        """
-        # Mouse position
         mx, my = pygame.mouse.get_pos()
-        # Skip when hovering overlay UI
-        if (
-            self.ui_flask_rect.collidepoint(mx, my)
-            or (getattr(self, 'ui_admin_rect', None) and self.ui_admin_rect.collidepoint(mx, my))
-            or (self.ui_show_spawn and self.ui_menu_rect.collidepoint(mx, my))
-            or (getattr(self, 'ui_show_admin', False) and getattr(self, 'ui_admin_menu_rect', None) and self.ui_admin_menu_rect.collidepoint(mx, my))
-        ):
+        if self.ui_flask_rect.collidepoint(mx, my) or (getattr(self, 'ui_admin_rect', None) and self.ui_admin_rect.collidepoint(mx, my)) or (self.ui_show_spawn and self.ui_menu_rect.collidepoint(mx, my)) or (getattr(self, 'ui_show_admin', False) and getattr(self, 'ui_admin_menu_rect', None) and self.ui_admin_menu_rect.collidepoint(mx, my)):
             self._prev_mouse = (mx, my)
             return
-        # Update previous mouse storage
         if self._prev_mouse is None:
             self._prev_mouse = (mx, my)
             return
-
-        # Don't interact in the sidebar or while loading
-        if (not self.ready) or (mx < self.sidebar_width):
+        if not self.ready or mx < self.sidebar_width:
             self._prev_mouse = (mx, my)
             return
-
-        # Convert to game view then to world coords (camera-aware)
         gvx = mx - self.sidebar_width
         gvy = my
         gx, gy = self.camera.view_to_world(gvx, gvy)
-
-        # Movement delta in world units (account for zoom)
         pmx, pmy = self._prev_mouse
-        dx = (mx - pmx) / max(self.camera.scale, 1e-6)
-        dy = (my - pmy) / max(self.camera.scale, 1e-6)
+        dx = (mx - pmx) / max(self.camera.scale, 1e-06)
+        dy = (my - pmy) / max(self.camera.scale, 1e-06)
         self._prev_mouse = (mx, my)
-
-        # If barely moving, still allow a slight outward nudge
-        moved = (dx*dx + dy*dy) ** 0.5
+        moved = (dx * dx + dy * dy) ** 0.5
         if moved < 0.1:
             dx = 0.0
             dy = 0.0
-
-        # Rebuild grids once for fresh neighborhood queries
         self.sand_system._rebuild_grid()
         self.water_system._rebuild_grid()
-
-        # Influence radius and strength
-        radius_cells = 2  # search 2x cells around
-        push_radius = 10  # pixel radius for outward nudge
+        radius_cells = 2
+        push_radius = 10
         move_strength_sand = 0.15
         move_strength_water = 0.25
         outward_strength = 0.12
-
-        # Sand neighbors
         sand_neighbors = self._get_nearby_sand(gx, gy, radius=radius_cells)
         for s in sand_neighbors:
-            # Check within pixel radius for outward component
             ox = s.x - gx
             oy = s.y - gy
-            dist2 = ox*ox + oy*oy
-            if dist2 <= push_radius*push_radius:
+            dist2 = ox * ox + oy * oy
+            if dist2 <= push_radius * push_radius:
                 d = dist2 ** 0.5 if dist2 > 0 else 0.01
                 nx = ox / d
                 ny = oy / d
                 s.vx += -nx * outward_strength
                 s.vy += -ny * outward_strength
-            # Add movement-based push
             s.vx += dx * move_strength_sand * 0.1
             s.vy += dy * move_strength_sand * 0.1
-
-        # Water neighbors
         water_neighbors = self._get_nearby_water(gx, gy, radius=radius_cells)
         for w in water_neighbors:
             ox = w.x - gx
             oy = w.y - gy
-            dist2 = ox*ox + oy*oy
-            if dist2 <= push_radius*push_radius:
+            dist2 = ox * ox + oy * oy
+            if dist2 <= push_radius * push_radius:
                 d = dist2 ** 0.5 if dist2 > 0 else 0.01
                 nx = ox / d
                 ny = oy / d
@@ -1040,114 +878,103 @@ class ParticleGame:
             w.vy += dy * move_strength_water * 0.1
 
     def _handle_npc_hazards(self):
-        """Apply burn/bleed/toxic effects to the NPC when touching lava or toxic waste."""
-        if self.npc is None:
+        if not getattr(self, 'npcs', None):
             return
         if not (self.lava_system.particles or self.toxic_system.particles):
             return
-        contact_r2 = 4.0  # within ~2px
+        contact_r2 = 4.0
         blood_per_frame = 3
         toxic_drip_radius = 1
-        for part in self.npc.particles:
-            px, py = part.pos
-            # Check lava first
-            lavas = self._get_nearby_lava(px, py, radius=2)
-            for lv in lavas[:8]:
-                dx = lv.x - px
-                dy = lv.y - py
-                if dx*dx + dy*dy <= contact_r2:
-                    self.npc.burn_timer = max(self.npc.burn_timer, 45)
-                    # Lower speed to avoid long horizontal streaks; spray now biased downward
-                    self.blood_system.add_spray(px, py, count=blood_per_frame, speed=1.0)
-                    break
-            else:
-                # Check toxic if no lava hit
-                tox = self._get_nearby_toxic(px, py, radius=2)
-                for tv in tox[:8]:
-                    dx = tv.x - px
-                    dy = tv.y - py
-                    if dx*dx + dy*dy <= contact_r2:
-                        self.npc.toxic_timer = max(self.npc.toxic_timer, 90)
-                        self.blood_system.add_spray(px, py, count=2, speed=1.2)
-                        self.toxic_system.add_particle_cluster(int(px), int(py), radius=toxic_drip_radius)
+        for npc in self.npcs:
+            for part in npc.particles:
+                px, py = part.pos
+                lavas = self._get_nearby_lava(px, py, radius=2)
+                for lv in lavas[:8]:
+                    dx = lv.x - px
+                    dy = lv.y - py
+                    if dx * dx + dy * dy <= contact_r2:
+                        npc.burn_timer = max(npc.burn_timer, 45)
+                        self.blood_system.add_spray(px, py, count=blood_per_frame, speed=1.0)
                         break
-    
+                else:
+                    tox = self._get_nearby_toxic(px, py, radius=2)
+                    for tv in tox[:8]:
+                        dx = tv.x - px
+                        dy = tv.y - py
+                        if dx * dx + dy * dy <= contact_r2:
+                            npc.toxic_timer = max(npc.toxic_timer, 90)
+                            self.blood_system.add_spray(px, py, count=2, speed=1.2)
+                            self.toxic_system.add_particle_cluster(int(px), int(py), radius=toxic_drip_radius)
+                            break
+
     def update(self):
-        """Update all game logic"""
-        # Main menu takes over updates when visible
+        try:
+            if getattr(self, 'show_main_menu', False):
+                dg_discord.update_for_menu()
+            else:
+                pc = 0
+                try:
+                    svc = get_service()
+                    if svc is not None:
+                        pc = sum((1 for p in svc.get_plugins() if getattr(p, 'enabled', False)))
+                except Exception:
+                    pc = 0
+                dg_discord.update_for_sandbox(pc)
+        except Exception:
+            pass
         if getattr(self, 'show_main_menu', False):
             if hasattr(self, 'menu'):
                 self.menu.update()
-            # Maintain simple frame/FPS counters
             self._frame_index += 1
             if hasattr(self, 'clock'):
                 self.fps = int(self.clock.get_fps())
             return
-        # Pause menu: pause simulation updates
         if getattr(self, 'show_pause_menu', False):
             if hasattr(self, 'pause_menu'):
                 self.pause_menu.update()
-            # Maintain FPS counters but skip simulation
             self._frame_index += 1
             if hasattr(self, 'clock'):
                 self.fps = int(self.clock.get_fps())
             return
         self._draw_on_canvas()
-        
-        # During loading screen, skip updates
         if not self.ready:
             return
-
-        # Apply cursor interaction before physics integrates
         self._apply_cursor_interaction()
-
-        # NPC dragging (if active tool and mouse held)
-        if self.npc is not None and self.current_tool == "npc" and self.is_drawing and self.npc_drag_index is not None:
+        if self.active_npc is not None and self.current_tool == 'npc' and self.is_drawing and (self.npc_drag_index is not None):
             mx, my = pygame.mouse.get_pos()
             if mx >= self.sidebar_width:
                 vx = mx - self.sidebar_width
                 gx, gy = self.camera.view_to_world(vx, my)
-                p = self.npc.particles[self.npc_drag_index]
-                p.pos[0] = gx
-                p.pos[1] = gy
-                p.prev[0] = gx
-                p.prev[1] = gy
-
-        # Adaptive scaling every 15 frames
-        total = (
-            self.sand_system.get_particle_count()
-            + self.water_system.get_particle_count()
-            + self.lava_system.get_particle_count()
-            + self.toxic_system.get_particle_count()
-            + self.blood_system.get_particle_count()
-        )
-        if (self._frame_index - self._last_scale_apply) >= 15:
-            # Use smoothed FPS
+                try:
+                    p = self.active_npc.particles[self.npc_drag_index]
+                    p.pos[0] = gx
+                    p.pos[1] = gy
+                    p.prev[0] = gx
+                    p.prev[1] = gy
+                except Exception:
+                    pass
+        total = self.sand_system.get_particle_count() + self.water_system.get_particle_count() + self.lava_system.get_particle_count() + self.toxic_system.get_particle_count() + self.blood_system.get_particle_count()
+        if self._frame_index - self._last_scale_apply >= 15:
             settings = recommend_settings(total, self._fps_avg or self.fps, self.target_fps, self.use_gpu)
-            s = settings["sand"]
-            w = settings["water"]
-            self.sand_system.neighbor_radius = s["neighbor_radius"]
-            self.sand_system.max_neighbors = s["max_neighbors"]
-            self.sand_system.skip_mod = s["skip_mod"]
-            self.water_system.neighbor_radius = w["neighbor_radius"]
-            self.water_system.max_neighbors = w["max_neighbors"]
-            self.water_system.skip_mod = w["skip_mod"]
-            # Lava uses water-like settings (similar fluid budget)
-            self.lava_system.neighbor_radius = w["neighbor_radius"]
-            self.lava_system.max_neighbors = w["max_neighbors"]
-            self.lava_system.skip_mod = w["skip_mod"]
-            # Toxic uses water-like settings too (viscous fluid)
-            self.toxic_system.neighbor_radius = w["neighbor_radius"]
-            self.toxic_system.max_neighbors = w["max_neighbors"]
-            self.toxic_system.skip_mod = w["skip_mod"]
-            # Oil uses water-like settings (thin fluid)
+            s = settings['sand']
+            w = settings['water']
+            self.sand_system.neighbor_radius = s['neighbor_radius']
+            self.sand_system.max_neighbors = s['max_neighbors']
+            self.sand_system.skip_mod = s['skip_mod']
+            self.water_system.neighbor_radius = w['neighbor_radius']
+            self.water_system.max_neighbors = w['max_neighbors']
+            self.water_system.skip_mod = w['skip_mod']
+            self.lava_system.neighbor_radius = w['neighbor_radius']
+            self.lava_system.max_neighbors = w['max_neighbors']
+            self.lava_system.skip_mod = w['skip_mod']
+            self.toxic_system.neighbor_radius = w['neighbor_radius']
+            self.toxic_system.max_neighbors = w['max_neighbors']
+            self.toxic_system.skip_mod = w['skip_mod']
             if hasattr(self, 'oil_system'):
-                self.oil_system.neighbor_radius = w["neighbor_radius"]
-                self.oil_system.max_neighbors = w["max_neighbors"]
-                self.oil_system.skip_mod = w["skip_mod"]
+                self.oil_system.neighbor_radius = w['neighbor_radius']
+                self.oil_system.max_neighbors = w['max_neighbors']
+                self.oil_system.skip_mod = w['skip_mod']
             self._last_scale_apply = self._frame_index
-
-        # Update particle systems (pass frame index for collision skipping)
         self.sand_system.update(self._frame_index)
         self.water_system.update(self._frame_index)
         if hasattr(self, 'oil_system'):
@@ -1156,28 +983,26 @@ class ParticleGame:
         self.toxic_system.update(self._frame_index)
         self.metal_system.update(self._frame_index)
         self.blocks_system.update(self._frame_index)
-        # Update NPC physics
         dt = 1.0 / max(self.target_fps, 1)
-        if self.npc is not None:
-            self.npc.update(dt, bounds=(self.game_width, self.height))
-
-        # Couple NPC with nearby particles (two-way gentle push)
-        if self.npc is not None:
+        if self.npcs:
+            for npc in list(self.npcs):
+                try:
+                    npc.update(dt, bounds=(self.game_width, self.height))
+                except Exception:
+                    try:
+                        self.npcs.remove(npc)
+                    except Exception:
+                        pass
+        if self.npcs:
             self._npc_particle_coupling()
-
-        # Handle cross-material collisions (grids were rebuilt during updates; avoid rebuilding here)
         self._handle_cross_material_collisions()
-        # NPC hazard effects from lava/toxic
         self._handle_npc_hazards()
-    
+
     def draw_sidebar(self):
-        """Draw the sidebar UI"""
         if not self.use_gpu:
-            # Sidebar background
             pygame.draw.rect(self.screen, (40, 40, 40), (0, 0, self.sidebar_width, self.height))
-            # Draw buttons
             for button_name, button_rect in self.buttons.items():
-                is_active = (self.current_tool == button_name)
+                is_active = self.current_tool == button_name
                 color = (100, 150, 255) if is_active else (60, 60, 60)
                 pygame.draw.rect(self.screen, color, button_rect)
                 pygame.draw.rect(self.screen, (150, 150, 150), button_rect, 2)
@@ -1185,22 +1010,18 @@ class ParticleGame:
                 text_rect = text.get_rect(center=button_rect.center)
                 self.screen.blit(text, text_rect)
             size_y = 220
-            size_text = self.button_font.render(f"Size: {self.brush_size}", True, (200, 200, 200))
+            size_text = self.button_font.render(f'Size: {self.brush_size}', True, (200, 200, 200))
             self.screen.blit(size_text, (10, size_y))
             info_y = 250
-            info_lines = ["UP/DOWN: Size", "ESC: Quit"]
+            info_lines = ['UP/DOWN: Size', 'ESC: Quit']
             for i, line in enumerate(info_lines):
                 info_text = self.button_font.render(line, True, (150, 150, 150))
                 self.screen.blit(info_text, (10, info_y + i * 20))
             return
-
-        # GPU path
         self.renderer.draw_color = (40, 40, 40, 255)
         self.renderer.fill_rect(sdl2rect.Rect(0, 0, self.sidebar_width, self.height))
-
-        # Buttons
         for button_name, button_rect in self.buttons.items():
-            is_active = (self.current_tool == button_name)
+            is_active = self.current_tool == button_name
             color = (100, 150, 255, 255) if is_active else (60, 60, 60, 255)
             border = (150, 150, 150, 255)
             rect = sdl2rect.Rect(button_rect.x, button_rect.y, button_rect.w, button_rect.h)
@@ -1208,59 +1029,46 @@ class ParticleGame:
             self.renderer.fill_rect(rect)
             self.renderer.draw_color = border
             self.renderer.draw_rect(rect)
-            # Text -> Texture
             text = button_name.upper()
             text_surf = self.button_font.render(text, True, (255, 255, 255))
             text_tex = self._get_text_texture(text, (255, 255, 255))
-            tr = text_surf.get_rect(center=(button_rect.x + button_rect.w//2, button_rect.y + button_rect.h//2))
+            tr = text_surf.get_rect(center=(button_rect.x + button_rect.w // 2, button_rect.y + button_rect.h // 2))
             self.renderer.copy(text_tex, dstrect=sdl2rect.Rect(tr.x, tr.y, tr.w, tr.h))
-
-        # Brush size and info
-        size_label = f"Size: {self.brush_size}"
+        size_label = f'Size: {self.brush_size}'
         size_surf = self.button_font.render(size_label, True, (200, 200, 200))
         size_tex = self._get_text_texture(size_label, (200, 200, 200))
         self.renderer.copy(size_tex, dstrect=sdl2rect.Rect(10, 220, size_surf.get_width(), size_surf.get_height()))
-
-        info_lines = ["UP/DOWN: Size", "ESC: Pause"]
+        info_lines = ['UP/DOWN: Size', 'ESC: Pause']
         y = 250
         for line in info_lines:
             info_surf = self.button_font.render(line, True, (150, 150, 150))
             info_tex = self._get_text_texture(line, (150, 150, 150))
             self.renderer.copy(info_tex, dstrect=sdl2rect.Rect(10, y, info_surf.get_width(), info_surf.get_height()))
             y += 20
-    
+
     def draw(self):
-        """Render the game"""
         if getattr(self, 'show_main_menu', False) or (not self.ready or not self.use_gpu):
-            # Clear screen
             self.screen.fill((20, 20, 20))
             if getattr(self, 'show_main_menu', False):
-                # Draw menu background using its own camera
                 pygame.draw.rect(self.screen, (30, 30, 30), (self.sidebar_width, 0, self.game_width, self.height))
-                # Prepare CPU surface for grid
-                if (self._game_surface is None) or (self._game_surface.get_size() != (self.game_width, self.height)):
+                if self._game_surface is None or self._game_surface.get_size() != (self.game_width, self.height):
                     self._game_surface = pygame.Surface((self.game_width, self.height)).convert()
                 game_surface = self._game_surface
                 game_surface.fill((30, 30, 30))
                 if hasattr(self, 'grid_bg') and hasattr(self, 'menu'):
                     self.grid_bg.draw_cpu(game_surface, self.menu.camera)
                 self.screen.blit(game_surface, (self.sidebar_width, 0))
-                # Draw menu options
                 self.menu.draw_cpu(self.screen)
                 pygame.display.flip()
                 return
             if self.ready:
-                # Draw game area
                 pygame.draw.rect(self.screen, (30, 30, 30), (self.sidebar_width, 0, self.game_width, self.height))
-                # Reuse a surface for the game area
-                if (self._game_surface is None) or (self._game_surface.get_size() != (self.game_width, self.height)):
+                if self._game_surface is None or self._game_surface.get_size() != (self.game_width, self.height):
                     self._game_surface = pygame.Surface((self.game_width, self.height)).convert()
                 game_surface = self._game_surface
                 game_surface.fill((20, 20, 20))
-                # Background grid (CPU path)
                 if getattr(self, 'show_grid', True) and hasattr(self, 'grid_bg') and hasattr(self, 'camera'):
                     self.grid_bg.draw_cpu(game_surface, self.camera)
-                # Draw particles (CPU path)
                 self.blocks_system.draw(game_surface)
                 self.metal_system.draw(game_surface)
                 self.sand_system.draw(game_surface)
@@ -1270,11 +1078,13 @@ class ParticleGame:
                 self.lava_system.draw(game_surface)
                 self.toxic_system.draw(game_surface)
                 self.blood_system.draw(game_surface)
-                # Draw NPC if present
-                if self.npc is not None:
-                    self.npc.draw(game_surface)
-                if getattr(self, 'camera', None) and not self.camera.is_identity():
-                    # Crop and scale according to camera
+                if getattr(self, 'npcs', None):
+                    for npc in self.npcs:
+                        try:
+                            npc.draw(game_surface)
+                        except Exception:
+                            pass
+                if getattr(self, 'camera', None) and (not self.camera.is_identity()):
                     vw = self.game_width
                     vh = self.height
                     src_w = max(1, int(vw / self.camera.scale))
@@ -1286,55 +1096,35 @@ class ParticleGame:
                     scaled = pygame.transform.smoothscale(sub, (vw, vh))
                     self.screen.blit(scaled, (self.sidebar_width, 0))
                 else:
-                    # Blit full game area
                     self.screen.blit(game_surface, (self.sidebar_width, 0))
-                # Overlay UI
                 self._draw_overlays_cpu()
-                # Pause overlay
                 if getattr(self, 'show_pause_menu', False):
-                    # Dim full screen
                     dim = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
                     dim.fill((0, 0, 0, 140))
                     self.screen.blit(dim, (0, 0))
-                    # Draw pause menu
                     if hasattr(self, 'pause_menu'):
                         self.pause_menu.draw_cpu(self.screen)
-                # Throttle stats update
                 now = time.time()
                 if now - self._stats_updated_at > 0.25:
                     self._stats_updated_at = now
-                    parts = [
-                        f"Blocks: {self.blocks_system.get_particle_count()}",
-                        f"Metal: {self.metal_system.get_particle_count()}",
-                        f"Sand: {self.sand_system.get_particle_count()}",
-                        f"Water: {self.water_system.get_particle_count()}",
-                    ]
+                    parts = [f'Blocks: {self.blocks_system.get_particle_count()}', f'Metal: {self.metal_system.get_particle_count()}', f'Sand: {self.sand_system.get_particle_count()}', f'Water: {self.water_system.get_particle_count()}']
                     if hasattr(self, 'oil_system'):
-                        parts.append(f"Oil: {self.oil_system.get_particle_count()}")
-                    parts.extend([
-                        f"Lava: {self.lava_system.get_particle_count()}",
-                        f"Toxic: {self.toxic_system.get_particle_count()}",
-                        f"Blood: {self.blood_system.get_particle_count()}",
-                    ])
-                    stats = " | ".join(parts) + f" | FPS: {self.fps}"
+                        parts.append(f'Oil: {self.oil_system.get_particle_count()}')
+                    parts.extend([f'Lava: {self.lava_system.get_particle_count()}', f'Toxic: {self.toxic_system.get_particle_count()}', f'Blood: {self.blood_system.get_particle_count()}'])
+                    stats = ' | '.join(parts) + f' | FPS: {self.fps}'
                     self._stats_cache_surf = self.font.render(stats, True, (200, 200, 200))
                 if self._stats_cache_surf:
                     self.screen.blit(self._stats_cache_surf, (self.sidebar_width + 10, self.height - 25))
-                # Cursor indicator
                 mouse_x, mouse_y = pygame.mouse.get_pos()
                 if self.sidebar_width <= mouse_x < self.width:
-                    color = (200, 100, 100) if self.current_tool == "sand" else (100, 150, 255)
+                    color = (200, 100, 100) if self.current_tool == 'sand' else (100, 150, 255)
                     pygame.draw.circle(self.screen, color, (mouse_x, mouse_y), self.brush_size, 1)
             pygame.display.flip()
             return
-
-        # GPU path
         self.renderer.draw_color = (20, 20, 20, 255)
         self.renderer.clear()
-        # Game area background and grid
         self.renderer.draw_color = (30, 30, 30, 255)
         self.renderer.fill_rect(sdl2rect.Rect(self.sidebar_width, 0, self.game_width, self.height))
-        # Menu render path on GPU
         if getattr(self, 'show_main_menu', False):
             if hasattr(self, 'grid_bg') and hasattr(self, 'menu'):
                 self.grid_bg.draw_gpu(self.renderer, (self.sidebar_width, 0, self.game_width, self.height), self.menu.camera)
@@ -1343,12 +1133,10 @@ class ParticleGame:
             return
             if getattr(self, 'show_grid', True) and hasattr(self, 'grid_bg') and hasattr(self, 'camera'):
                 self.grid_bg.draw_gpu(self.renderer, (self.sidebar_width, 0, self.game_width, self.height), self.camera)
-        use_cpu_composite = getattr(self, 'camera', None) and not self.camera.is_identity()
+        use_cpu_composite = getattr(self, 'camera', None) and (not self.camera.is_identity())
         if use_cpu_composite:
-            # Composite to CPU surface, then crop/scale and upload as texture
             cpu_layer = pygame.Surface((self.game_width, self.height), pygame.SRCALPHA)
             cpu_layer.fill((20, 20, 20, 255))
-            # Background grid on CPU composite layer
             if hasattr(self, 'grid_bg') and hasattr(self, 'camera'):
                 self.grid_bg.draw_cpu(cpu_layer, self.camera)
             self.blocks_system.draw(cpu_layer)
@@ -1374,128 +1162,92 @@ class ParticleGame:
             tex = Texture.from_surface(self.renderer, scaled)
             self.renderer.copy(tex, dstrect=sdl2rect.Rect(self.sidebar_width, 0, self.game_width, self.height))
         else:
-            # Draw particles via batched point rendering
-            # Sand: grouped by color
             sand_groups = self.sand_system.get_point_groups()
             for color, pts in sand_groups.items():
                 if not pts:
                     continue
-                # Add sidebar offset
-                pts_offset = [(x + self.sidebar_width, y) for (x, y) in pts]
+                pts_offset = [(x + self.sidebar_width, y) for x, y in pts]
                 self.renderer.draw_color = (color[0], color[1], color[2], 255)
                 self.renderer.draw_points(pts_offset)
-
-            # Metal: single color
             m_color, m_points = self.metal_system.get_point_groups()
             if m_points:
-                m_pts_offset = [(x + self.sidebar_width, y) for (x, y) in m_points]
+                m_pts_offset = [(x + self.sidebar_width, y) for x, y in m_points]
                 self.renderer.draw_color = (m_color[0], m_color[1], m_color[2], 255)
                 self.renderer.draw_points(m_pts_offset)
-
-            # Blocks: single color points
             bl_color, bl_points = self.blocks_system.get_point_groups()
             if bl_points:
-                bl_pts_offset = [(x + self.sidebar_width, y) for (x, y) in bl_points]
+                bl_pts_offset = [(x + self.sidebar_width, y) for x, y in bl_points]
                 self.renderer.draw_color = (bl_color[0], bl_color[1], bl_color[2], 255)
                 self.renderer.draw_points(bl_pts_offset)
-
-            # Oil: may return grouped colors (normal/burning)
             oil_groups = self.oil_system.get_point_groups() if hasattr(self, 'oil_system') else None
             if oil_groups:
                 if hasattr(oil_groups, 'items'):
                     for color, pts in oil_groups.items():
                         if not pts:
                             continue
-                        pts_offset = [(x + self.sidebar_width, y) for (x, y) in pts]
+                        pts_offset = [(x + self.sidebar_width, y) for x, y in pts]
                         self.renderer.draw_color = (color[0], color[1], color[2], 255)
                         self.renderer.draw_points(pts_offset)
                 else:
-                    # Fallback tuple (color, pts)
                     o_color, o_points = oil_groups
                     if o_points:
-                        o_pts_offset = [(x + self.sidebar_width, y) for (x, y) in o_points]
+                        o_pts_offset = [(x + self.sidebar_width, y) for x, y in o_points]
                         self.renderer.draw_color = (o_color[0], o_color[1], o_color[2], 255)
                         self.renderer.draw_points(o_pts_offset)
-
-            # Water: single color
             w_color, w_points = self.water_system.get_point_groups()
             if w_points:
-                w_pts_offset = [(x + self.sidebar_width, y) for (x, y) in w_points]
+                w_pts_offset = [(x + self.sidebar_width, y) for x, y in w_points]
                 self.renderer.draw_color = (w_color[0], w_color[1], w_color[2], 255)
                 self.renderer.draw_points(w_pts_offset)
-
-            # Lava: single color
             l_color, l_points = self.lava_system.get_point_groups()
             if l_points:
-                l_pts_offset = [(x + self.sidebar_width, y) for (x, y) in l_points]
+                l_pts_offset = [(x + self.sidebar_width, y) for x, y in l_points]
                 self.renderer.draw_color = (l_color[0], l_color[1], l_color[2], 255)
                 self.renderer.draw_points(l_pts_offset)
-
-            # Toxic waste: single color
             t_color, t_points = self.toxic_system.get_point_groups()
             if t_points:
-                t_pts_offset = [(x + self.sidebar_width, y) for (x, y) in t_points]
+                t_pts_offset = [(x + self.sidebar_width, y) for x, y in t_points]
                 self.renderer.draw_color = (t_color[0], t_color[1], t_color[2], 255)
                 self.renderer.draw_points(t_pts_offset)
-
-            # Blood: single color
             b_color, b_points = self.blood_system.get_point_groups()
             if b_points:
-                b_pts_offset = [(x + self.sidebar_width, y) for (x, y) in b_points]
+                b_pts_offset = [(x + self.sidebar_width, y) for x, y in b_points]
                 self.renderer.draw_color = (b_color[0], b_color[1], b_color[2], 255)
                 self.renderer.draw_points(b_pts_offset)
-
-            # NPC: draw via CPU surface turned into texture (only if present)
-            if self.npc is not None:
+            if getattr(self, 'npcs', None):
                 cpu_layer = pygame.Surface((self.game_width, self.height), pygame.SRCALPHA)
-                self.npc.draw(cpu_layer)
+                for npc in self.npcs:
+                    try:
+                        npc.draw(cpu_layer)
+                    except Exception:
+                        pass
                 npc_tex = Texture.from_surface(self.renderer, cpu_layer)
                 self.renderer.copy(npc_tex, dstrect=sdl2rect.Rect(self.sidebar_width, 0, self.game_width, self.height))
-
-        # Overlay UI
         self._draw_overlays_gpu()
-
-        # Pause overlay (GPU)
         if getattr(self, 'show_pause_menu', False):
-            # Dim background
             self.renderer.draw_color = (0, 0, 0, 140)
             self.renderer.fill_rect(sdl2rect.Rect(0, 0, self.width, self.height))
-            # Draw pause menu
             if hasattr(self, 'pause_menu'):
                 self.pause_menu.draw_gpu(self.renderer)
-
-        # Stats text (throttled)
         now = time.time()
-        if (self._stats_cache_tex is None) or (now - self._stats_updated_at > 0.25):
+        if self._stats_cache_tex is None or now - self._stats_updated_at > 0.25:
             self._stats_updated_at = now
-            parts = [
-                f"Blocks: {self.blocks_system.get_particle_count()}",
-                f"Metal: {self.metal_system.get_particle_count()}",
-                f"Sand: {self.sand_system.get_particle_count()}",
-                f"Water: {self.water_system.get_particle_count()}",
-            ]
+            parts = [f'Blocks: {self.blocks_system.get_particle_count()}', f'Metal: {self.metal_system.get_particle_count()}', f'Sand: {self.sand_system.get_particle_count()}', f'Water: {self.water_system.get_particle_count()}']
             if hasattr(self, 'oil_system'):
-                parts.append(f"Oil: {self.oil_system.get_particle_count()}")
-            parts.extend([
-                f"Lava: {self.lava_system.get_particle_count()}",
-                f"Toxic: {self.toxic_system.get_particle_count()}",
-                f"Blood: {self.blood_system.get_particle_count()}",
-            ])
-            stats = " | ".join(parts) + f" | FPS: {self.fps}"
+                parts.append(f'Oil: {self.oil_system.get_particle_count()}')
+            parts.extend([f'Lava: {self.lava_system.get_particle_count()}', f'Toxic: {self.toxic_system.get_particle_count()}', f'Blood: {self.blood_system.get_particle_count()}'])
+            stats = ' | '.join(parts) + f' | FPS: {self.fps}'
             stats_surf = self.font.render(stats, True, (200, 200, 200))
             self._stats_cache_tex = Texture.from_surface(self.renderer, stats_surf)
             self._stats_cache_surf = stats_surf
         if self._stats_cache_tex and self._stats_cache_surf:
             self.renderer.copy(self._stats_cache_tex, dstrect=sdl2rect.Rect(self.sidebar_width + 10, self.height - 25, self._stats_cache_surf.get_width(), self._stats_cache_surf.get_height()))
-
-        # Cursor indicator (draw a thin rectangle as approximate brush outline)
         mouse_x, mouse_y = pygame.mouse.get_pos()
         if self.sidebar_width <= mouse_x < self.width:
             r = self.brush_size
-            self.renderer.draw_color = (200, 100, 100, 255) if self.current_tool == "sand" else (100, 150, 255, 255)
-            outline = sdl2rect.Rect(mouse_x - r, mouse_y - r, r*2, r*2)
+            self.renderer.draw_color = (200, 100, 100, 255) if self.current_tool == 'sand' else (100, 150, 255, 255)
+            outline = sdl2rect.Rect(mouse_x - r, mouse_y - r, r * 2, r * 2)
             self.renderer.draw_rect(outline)
-
         self.renderer.present()
 
     def _ensure_ui_textures(self):
@@ -1545,13 +1297,10 @@ class ParticleGame:
                 self._ui_blocks_tex = None
 
     def _draw_overlays_cpu(self):
-        # Icon button: 50% transparent black box with icon image
         overlay = pygame.Surface(self.ui_flask_rect.size, pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 128))  # 50% black
+        overlay.fill((0, 0, 0, 128))
         self.screen.blit(overlay, self.ui_flask_rect.topleft)
-        # Border for icon box for a cleaner look
         pygame.draw.rect(self.screen, (90, 90, 90), self.ui_flask_rect, 1)
-        # Draw image centered and scaled to fit with padding
         pad = 6
         dest_w = max(1, self.ui_flask_rect.w - 2 * pad)
         dest_h = max(1, self.ui_flask_rect.h - 2 * pad)
@@ -1562,15 +1311,13 @@ class ParticleGame:
             dx = self.ui_flask_rect.x + (self.ui_flask_rect.w - scaled.get_width()) // 2
             dy = self.ui_flask_rect.y + (self.ui_flask_rect.h - scaled.get_height()) // 2
             self.screen.blit(scaled, (dx, dy))
-
-        # Admin icon (to the right of flask)
         if hasattr(self, 'ui_admin_rect'):
             overlay2 = pygame.Surface(self.ui_admin_rect.size, pygame.SRCALPHA)
             overlay2.fill((0, 0, 0, 128))
             self.screen.blit(overlay2, self.ui_admin_rect.topleft)
             pygame.draw.rect(self.screen, (90, 90, 90), self.ui_admin_rect, 1)
             if not hasattr(self, 'ui_admin_surf'):
-                self.ui_admin_surf = self._load_image("src/assets/admin.png")
+                self.ui_admin_surf = self._load_image('src/assets/admin.png')
                 if not self.ui_admin_surf:
                     self.ui_admin_surf = pygame.Surface((32, 32), pygame.SRCALPHA)
                     self.ui_admin_surf.fill((220, 220, 220, 255))
@@ -1583,47 +1330,34 @@ class ParticleGame:
             dx2 = self.ui_admin_rect.x + (self.ui_admin_rect.w - scaled2.get_width()) // 2
             dy2 = self.ui_admin_rect.y + (self.ui_admin_rect.h - scaled2.get_height()) // 2
             self.screen.blit(scaled2, (dx2, dy2))
-
-        # Spawn menu if visible: larger, styled panel with header and shadow
         if self.ui_show_spawn:
             mw, mh = self.ui_menu_rect.size
             header_h = getattr(self, 'ui_header_h', 36)
-            # Drop shadow
             shadow = pygame.Surface((mw, mh), pygame.SRCALPHA)
             pygame.draw.rect(shadow, (0, 0, 0, 100), pygame.Rect(0, 0, mw, mh), border_radius=10)
             self.screen.blit(shadow, (self.ui_menu_rect.x + 3, self.ui_menu_rect.y + 4))
-
-            # Panel with rounded corners
             panel = pygame.Surface((mw, mh), pygame.SRCALPHA)
             pygame.draw.rect(panel, (0, 0, 0, 180), pygame.Rect(0, 0, mw, mh), border_radius=10)
-            # Header bar
             pygame.draw.rect(panel, (12, 12, 12, 210), pygame.Rect(0, 0, mw, header_h), border_radius=10)
-            # Panel border and inner highlight
             pygame.draw.rect(panel, (100, 100, 100, 220), pygame.Rect(0, 0, mw, mh), width=1, border_radius=10)
             pygame.draw.rect(panel, (255, 255, 255, 25), pygame.Rect(1, 1, mw - 2, mh - 2), width=1, border_radius=9)
-            # Blit panel
             self.screen.blit(panel, self.ui_menu_rect.topleft)
-            # Title centered in header
-            title_text = self.button_font.render("SPAWN", True, (220, 220, 220))
+            title_text = self.button_font.render('SPAWN', True, (220, 220, 220))
             ty = self.ui_menu_rect.y + (header_h - title_text.get_height()) // 2
             self.screen.blit(title_text, (self.ui_menu_rect.x + 12, ty))
-
-            # Tiles
             mx, my = pygame.mouse.get_pos()
             for tile in getattr(self, 'ui_tiles', []):
-                rect = self.ui_tile_rects.get(tile["key"]) if hasattr(self, 'ui_tile_rects') else None
+                rect = self.ui_tile_rects.get(tile['key']) if hasattr(self, 'ui_tile_rects') else None
                 if not rect:
                     continue
                 hovered = rect.collidepoint(mx, my)
                 tile_bg = pygame.Surface(rect.size, pygame.SRCALPHA)
                 base_alpha = 215 if hovered else 190
-                # Slightly brighter if selected (no stroke)
-                if self.current_tool == tile["key"]:
+                if self.current_tool == tile['key']:
                     base_alpha = 230 if hovered else 210
                 pygame.draw.rect(tile_bg, (25, 25, 25, base_alpha), pygame.Rect(0, 0, rect.w, rect.h), border_radius=8)
                 self.screen.blit(tile_bg, rect.topleft)
-                # Image or placeholder
-                surf = tile.get("surf")
+                surf = tile.get('surf')
                 if surf:
                     iw, ih = surf.get_size()
                     pad = 8
@@ -1632,31 +1366,24 @@ class ParticleGame:
                     scale = min(dw / iw, dh / ih)
                     img = pygame.transform.smoothscale(surf, (int(iw * scale), int(ih * scale)))
                     dx = rect.x + (rect.w - img.get_width()) // 2
-                    # Leave space for label at the bottom inside the tile
                     dy = rect.y + (rect.h - img.get_height()) // 2 - 6
                     self.screen.blit(img, (dx, dy))
                 else:
-                    # Colored placeholder
                     ph = pygame.Surface((rect.w - 16, rect.h - 24), pygame.SRCALPHA)
-                    ph.fill((*tile.get("color", (120, 120, 120)), 220))
+                    ph.fill((*tile.get('color', (120, 120, 120)), 220))
                     px = rect.x + (rect.w - ph.get_width()) // 2
                     py = rect.y + (rect.h - ph.get_height()) // 2
                     self.screen.blit(ph, (px, py))
-                # Label inside tile at bottom
-                label_surf = self.button_font.render(tile["label"], True, (210, 210, 210))
+                label_surf = self.button_font.render(tile['label'], True, (210, 210, 210))
                 lx = rect.x + (rect.w - label_surf.get_width()) // 2
                 ly = rect.bottom - label_surf.get_height() - 6
-                # Subtle background for label readability
-                label_bg = pygame.Surface((label_surf.get_width()+8, label_surf.get_height()+4), pygame.SRCALPHA)
+                label_bg = pygame.Surface((label_surf.get_width() + 8, label_surf.get_height() + 4), pygame.SRCALPHA)
                 label_bg.fill((0, 0, 0, 90))
-                self.screen.blit(label_bg, (lx-4, ly-2))
+                self.screen.blit(label_bg, (lx - 4, ly - 2))
                 self.screen.blit(label_surf, (lx, ly))
-
-        # Admin panel
         if getattr(self, 'ui_show_admin', False):
             amw, amh = self.ui_admin_menu_rect.size
             header_h = getattr(self, 'ui_header_h', 36)
-            # Shadow
             shadow = pygame.Surface((amw, amh), pygame.SRCALPHA)
             pygame.draw.rect(shadow, (0, 0, 0, 100), pygame.Rect(0, 0, amw, amh), border_radius=10)
             self.screen.blit(shadow, (self.ui_admin_menu_rect.x + 3, self.ui_admin_menu_rect.y + 4))
@@ -1666,35 +1393,40 @@ class ParticleGame:
             pygame.draw.rect(panel, (100, 100, 100, 220), pygame.Rect(0, 0, amw, amh), width=1, border_radius=10)
             pygame.draw.rect(panel, (255, 255, 255, 25), pygame.Rect(1, 1, amw - 2, amh - 2), width=1, border_radius=9)
             self.screen.blit(panel, self.ui_admin_menu_rect.topleft)
-            title_text = self.button_font.render("ADMIN", True, (220, 220, 220))
+            title_text = self.button_font.render('ADMIN', True, (220, 220, 220))
             ty = self.ui_admin_menu_rect.y + (header_h - title_text.get_height()) // 2
             self.screen.blit(title_text, (self.ui_admin_menu_rect.x + 12, ty))
-            # Clear button
-            btn_w, btn_h = amw - 32, 40
+            btn_w, btn_h = (amw - 32, 40)
             btn_x = self.ui_admin_menu_rect.x + 16
-            btn_y = self.ui_admin_menu_rect.y + header_h + 20
-            self.ui_admin_clear_rect = pygame.Rect(btn_x, btn_y, btn_w, btn_h)
-            hovered = self.ui_admin_clear_rect.collidepoint(pygame.mouse.get_pos())
+            btn_y1 = self.ui_admin_menu_rect.y + header_h + 20
+            self.ui_admin_clear_rect = pygame.Rect(btn_x, btn_y1, btn_w, btn_h)
+            hovered1 = self.ui_admin_clear_rect.collidepoint(pygame.mouse.get_pos())
             pygame.draw.rect(self.screen, (30, 30, 30), self.ui_admin_clear_rect, border_radius=8)
-            if hovered:
+            if hovered1:
                 pygame.draw.rect(self.screen, (60, 60, 60), self.ui_admin_clear_rect, 0, border_radius=8)
-            label = self.button_font.render("CLEAR EVERYTHING", True, (220, 220, 220))
-            lrx = self.ui_admin_clear_rect.x + (self.ui_admin_clear_rect.w - label.get_width()) // 2
-            lry = self.ui_admin_clear_rect.y + (self.ui_admin_clear_rect.h - label.get_height()) // 2
-            self.screen.blit(label, (lrx, lry))
-
-        # Blocks drag preview rectangle (drawn over the world)
-        if self.current_tool == "blocks" and self.blocks_drag_active and self.blocks_drag_start and self.blocks_drag_current:
-            (sx, sy) = self.blocks_drag_start
-            (cx, cy) = self.blocks_drag_current
-            # Convert world to view space
+            label1 = self.button_font.render('CLEAR EVERYTHING', True, (220, 220, 220))
+            lrx1 = self.ui_admin_clear_rect.x + (self.ui_admin_clear_rect.w - label1.get_width()) // 2
+            lry1 = self.ui_admin_clear_rect.y + (self.ui_admin_clear_rect.h - label1.get_height()) // 2
+            self.screen.blit(label1, (lrx1, lry1))
+            btn_y2 = btn_y1 + btn_h + 12
+            self.ui_admin_clear_npcs_rect = pygame.Rect(btn_x, btn_y2, btn_w, btn_h)
+            hovered2 = self.ui_admin_clear_npcs_rect.collidepoint(pygame.mouse.get_pos())
+            pygame.draw.rect(self.screen, (30, 30, 30), self.ui_admin_clear_npcs_rect, border_radius=8)
+            if hovered2:
+                pygame.draw.rect(self.screen, (60, 60, 60), self.ui_admin_clear_npcs_rect, 0, border_radius=8)
+            label2 = self.button_font.render('CLEAR THE LIVING', True, (220, 220, 220))
+            lrx2 = self.ui_admin_clear_npcs_rect.x + (self.ui_admin_clear_npcs_rect.w - label2.get_width()) // 2
+            lry2 = self.ui_admin_clear_npcs_rect.y + (self.ui_admin_clear_npcs_rect.h - label2.get_height()) // 2
+            self.screen.blit(label2, (lrx2, lry2))
+        if self.current_tool == 'blocks' and self.blocks_drag_active and self.blocks_drag_start and self.blocks_drag_current:
+            sx, sy = self.blocks_drag_start
+            cx, cy = self.blocks_drag_current
             v1x, v1y = self.camera.world_to_view(sx, sy)
             v2x, v2y = self.camera.world_to_view(cx, cy)
             x = self.sidebar_width + min(v1x, v2x)
             y = min(v1y, v2y)
             w = abs(v2x - v1x)
             h = abs(v2y - v1y)
-            # Semi-transparent fill and border
             preview = pygame.Surface((max(1, w), max(1, h)), pygame.SRCALPHA)
             preview.fill((100, 150, 255, 50))
             self.screen.blit(preview, (x, y))
@@ -1702,13 +1434,10 @@ class ParticleGame:
 
     def _draw_overlays_gpu(self):
         self._ensure_ui_textures()
-        # Icon button box (spawn)
         self.renderer.draw_color = (0, 0, 0, 128)
         self.renderer.fill_rect(sdl2rect.Rect(self.ui_flask_rect.x, self.ui_flask_rect.y, self.ui_flask_rect.w, self.ui_flask_rect.h))
-        # Border for icon box
         self.renderer.draw_color = (90, 90, 90, 255)
         self.renderer.draw_rect(sdl2rect.Rect(self.ui_flask_rect.x, self.ui_flask_rect.y, self.ui_flask_rect.w, self.ui_flask_rect.h))
-        # Icon image sizing and copy
         iw, ih = (0, 0)
         if self.ui_flask_surf:
             iw, ih = self.ui_flask_surf.get_size()
@@ -1728,8 +1457,6 @@ class ParticleGame:
                 self.renderer.copy(tmp_tex, dstrect=sdl2rect.Rect(dx, dy, w, h))
             except Exception:
                 pass
-
-        # Admin icon box
         if hasattr(self, 'ui_admin_rect'):
             self.renderer.draw_color = (0, 0, 0, 128)
             self.renderer.fill_rect(sdl2rect.Rect(self.ui_admin_rect.x, self.ui_admin_rect.y, self.ui_admin_rect.w, self.ui_admin_rect.h))
@@ -1738,7 +1465,7 @@ class ParticleGame:
             if self._ui_admin_tex is None:
                 try:
                     if not hasattr(self, 'ui_admin_surf'):
-                        self.ui_admin_surf = self._load_image("src/assets/admin.png")
+                        self.ui_admin_surf = self._load_image('src/assets/admin.png')
                     if self.ui_admin_surf:
                         self._ui_admin_tex = Texture.from_surface(self.renderer, self.ui_admin_surf)
                 except Exception:
@@ -1762,43 +1489,33 @@ class ParticleGame:
                     self.renderer.copy(tmp2, dstrect=sdl2rect.Rect(dx2, dy2, w2, h2))
                 except Exception:
                     pass
-
         if self.ui_show_spawn:
             header_h = getattr(self, 'ui_header_h', 36)
-            # Shadow behind panel
             self.renderer.draw_color = (0, 0, 0, 100)
             self.renderer.fill_rect(sdl2rect.Rect(self.ui_menu_rect.x + 3, self.ui_menu_rect.y + 4, self.ui_menu_rect.w, self.ui_menu_rect.h))
-            # Panel
             self.renderer.draw_color = (0, 0, 0, 180)
             self.renderer.fill_rect(sdl2rect.Rect(self.ui_menu_rect.x, self.ui_menu_rect.y, self.ui_menu_rect.w, self.ui_menu_rect.h))
-            # Header bar
             self.renderer.draw_color = (12, 12, 12, 210)
             self.renderer.fill_rect(sdl2rect.Rect(self.ui_menu_rect.x, self.ui_menu_rect.y, self.ui_menu_rect.w, header_h))
-            # Panel border
             self.renderer.draw_color = (100, 100, 100, 255)
             self.renderer.draw_rect(sdl2rect.Rect(self.ui_menu_rect.x, self.ui_menu_rect.y, self.ui_menu_rect.w, self.ui_menu_rect.h))
-            # Title centered in header
-            title = "SPAWN"
+            title = 'SPAWN'
             title_tex = self._get_text_texture(title, (220, 220, 220))
             title_surf = self.button_font.render(title, True, (220, 220, 220))
             ty = self.ui_menu_rect.y + (header_h - title_surf.get_height()) // 2
             self.renderer.copy(title_tex, dstrect=sdl2rect.Rect(self.ui_menu_rect.x + 12, ty, title_surf.get_width(), title_surf.get_height()))
-
-            # Tiles (water uses texture if available, others are colored rects with label)
             mx, my = pygame.mouse.get_pos()
             for tile in getattr(self, 'ui_tiles', []):
-                rect = self.ui_tile_rects.get(tile["key"]) if hasattr(self, 'ui_tile_rects') else None
+                rect = self.ui_tile_rects.get(tile['key']) if hasattr(self, 'ui_tile_rects') else None
                 if not rect:
                     continue
                 hovered = rect.collidepoint(mx, my)
                 alpha = 215 if hovered else 185
-                # Slightly brighter if selected
-                if self.current_tool == tile["key"]:
+                if self.current_tool == tile['key']:
                     alpha = 230 if hovered else 205
                 self.renderer.draw_color = (25, 25, 25, alpha)
                 self.renderer.fill_rect(sdl2rect.Rect(rect.x, rect.y, rect.w, rect.h))
-
-                surf = tile.get("surf")
+                surf = tile.get('surf')
                 if surf is not None:
                     iw, ih = surf.get_size()
                     pad = 8
@@ -1809,21 +1526,20 @@ class ParticleGame:
                     h = int((ih or 1) * scale)
                     dx = rect.x + (rect.w - w) // 2
                     dy = rect.y + (rect.h - h) // 2
-                    # Use cached texture per known tile
                     tex = None
-                    if tile["key"] == "water":
+                    if tile['key'] == 'water':
                         tex = self._ui_water_tex
-                    elif tile["key"] == "sand":
+                    elif tile['key'] == 'sand':
                         tex = self._ui_sand_tex
-                    elif tile["key"] == "oil":
+                    elif tile['key'] == 'oil':
                         tex = self._ui_oil_tex
-                    elif tile["key"] == "lava":
+                    elif tile['key'] == 'lava':
                         tex = self._ui_lava_tex
-                    elif tile["key"] == "npc":
+                    elif tile['key'] == 'npc':
                         tex = self._ui_npc_tex
-                    elif tile["key"] == "toxic":
+                    elif tile['key'] == 'toxic':
                         tex = self._ui_toxic_tex
-                    elif tile["key"] == "blocks":
+                    elif tile['key'] == 'blocks':
                         tex = self._ui_blocks_tex
                     if tex:
                         self.renderer.copy(tex, dstrect=sdl2rect.Rect(dx, dy, w, h))
@@ -1834,135 +1550,117 @@ class ParticleGame:
                         except Exception:
                             pass
                 else:
-                    # Colored placeholder rectangle
-                    self.renderer.draw_color = (tile.get("color", (120, 120, 120))[0], tile.get("color", (120, 120, 120))[1], tile.get("color", (120, 120, 120))[2], 220)
+                    self.renderer.draw_color = (tile.get('color', (120, 120, 120))[0], tile.get('color', (120, 120, 120))[1], tile.get('color', (120, 120, 120))[2], 220)
                     inset = 8
                     self.renderer.fill_rect(sdl2rect.Rect(rect.x + inset, rect.y + inset, max(0, rect.w - 2 * inset), max(0, rect.h - 2 * inset)))
-
-                # Label inside tile at bottom
-                lbl = tile["label"]
+                lbl = tile['label']
                 label_surf = self.button_font.render(lbl, True, (210, 210, 210))
                 label_tex = self._get_text_texture(lbl, (210, 210, 210))
                 lx = rect.x + (rect.w - label_surf.get_width()) // 2
                 ly = rect.bottom - label_surf.get_height() - 6
-                # Subtle background for readability (drawn as a filled rect)
                 self.renderer.draw_color = (0, 0, 0, 90)
-                self.renderer.fill_rect(sdl2rect.Rect(lx-4, ly-2, label_surf.get_width()+8, label_surf.get_height()+4))
+                self.renderer.fill_rect(sdl2rect.Rect(lx - 4, ly - 2, label_surf.get_width() + 8, label_surf.get_height() + 4))
                 self.renderer.copy(label_tex, dstrect=sdl2rect.Rect(lx, ly, label_surf.get_width(), label_surf.get_height()))
-
-        # Admin panel (GPU)
         if getattr(self, 'ui_show_admin', False) and hasattr(self, 'ui_admin_menu_rect'):
             header_h = getattr(self, 'ui_header_h', 36)
-            # Shadow
             self.renderer.draw_color = (0, 0, 0, 100)
             self.renderer.fill_rect(sdl2rect.Rect(self.ui_admin_menu_rect.x + 3, self.ui_admin_menu_rect.y + 4, self.ui_admin_menu_rect.w, self.ui_admin_menu_rect.h))
-            # Panel
             self.renderer.draw_color = (0, 0, 0, 180)
             self.renderer.fill_rect(sdl2rect.Rect(self.ui_admin_menu_rect.x, self.ui_admin_menu_rect.y, self.ui_admin_menu_rect.w, self.ui_admin_menu_rect.h))
-            # Header
             self.renderer.draw_color = (12, 12, 12, 210)
             self.renderer.fill_rect(sdl2rect.Rect(self.ui_admin_menu_rect.x, self.ui_admin_menu_rect.y, self.ui_admin_menu_rect.w, header_h))
-            # Border
             self.renderer.draw_color = (100, 100, 100, 255)
             self.renderer.draw_rect(sdl2rect.Rect(self.ui_admin_menu_rect.x, self.ui_admin_menu_rect.y, self.ui_admin_menu_rect.w, self.ui_admin_menu_rect.h))
-            # Title
-            title = "ADMIN"
+            title = 'ADMIN'
             title_tex = self._get_text_texture(title, (220, 220, 220))
             title_surf = self.button_font.render(title, True, (220, 220, 220))
             ty = self.ui_admin_menu_rect.y + (header_h - title_surf.get_height()) // 2
             self.renderer.copy(title_tex, dstrect=sdl2rect.Rect(self.ui_admin_menu_rect.x + 12, ty, title_surf.get_width(), title_surf.get_height()))
-            # Button rect and label
-            btn_w, btn_h = self.ui_admin_menu_rect.w - 32, 40
+            btn_w, btn_h = (self.ui_admin_menu_rect.w - 32, 40)
             btn_x = self.ui_admin_menu_rect.x + 16
-            btn_y = self.ui_admin_menu_rect.y + header_h + 20
-            self.ui_admin_clear_rect = pygame.Rect(btn_x, btn_y, btn_w, btn_h)
-            # Draw button background
+            btn_y1 = self.ui_admin_menu_rect.y + header_h + 20
+            self.ui_admin_clear_rect = pygame.Rect(btn_x, btn_y1, btn_w, btn_h)
             self.renderer.draw_color = (30, 30, 30, 255)
-            self.renderer.fill_rect(sdl2rect.Rect(btn_x, btn_y, btn_w, btn_h))
-            lbl = "CLEAR EVERYTHING"
-            lbl_surf = self.button_font.render(lbl, True, (220, 220, 220))
-            lbl_tex = self._get_text_texture(lbl, (220, 220, 220))
-            lrx = btn_x + (btn_w - lbl_surf.get_width()) // 2
-            lry = btn_y + (btn_h - lbl_surf.get_height()) // 2
-            self.renderer.copy(lbl_tex, dstrect=sdl2rect.Rect(lrx, lry, lbl_surf.get_width(), lbl_surf.get_height()))
-        # Blocks drag preview rectangle (GPU)
-        if self.current_tool == "blocks" and self.blocks_drag_active and self.blocks_drag_start and self.blocks_drag_current:
-            (sx, sy) = self.blocks_drag_start
-            (cx, cy) = self.blocks_drag_current
+            self.renderer.fill_rect(sdl2rect.Rect(btn_x, btn_y1, btn_w, btn_h))
+            lbl1 = 'CLEAR EVERYTHING'
+            lbl1_surf = self.button_font.render(lbl1, True, (220, 220, 220))
+            lbl1_tex = self._get_text_texture(lbl1, (220, 220, 220))
+            lrx1 = btn_x + (btn_w - lbl1_surf.get_width()) // 2
+            lry1 = btn_y1 + (btn_h - lbl1_surf.get_height()) // 2
+            self.renderer.copy(lbl1_tex, dstrect=sdl2rect.Rect(lrx1, lry1, lbl1_surf.get_width(), lbl1_surf.get_height()))
+            btn_y2 = btn_y1 + btn_h + 12
+            self.ui_admin_clear_npcs_rect = pygame.Rect(btn_x, btn_y2, btn_w, btn_h)
+            self.renderer.draw_color = (30, 30, 30, 255)
+            self.renderer.fill_rect(sdl2rect.Rect(btn_x, btn_y2, btn_w, btn_h))
+            lbl2 = 'CLEAR THE LIVING'
+            lbl2_surf = self.button_font.render(lbl2, True, (220, 220, 220))
+            lbl2_tex = self._get_text_texture(lbl2, (220, 220, 220))
+            lrx2 = btn_x + (btn_w - lbl2_surf.get_width()) // 2
+            lry2 = btn_y2 + (btn_h - lbl2_surf.get_height()) // 2
+            self.renderer.copy(lbl2_tex, dstrect=sdl2rect.Rect(lrx2, lry2, lbl2_surf.get_width(), lbl2_surf.get_height()))
+        if self.current_tool == 'blocks' and self.blocks_drag_active and self.blocks_drag_start and self.blocks_drag_current:
+            sx, sy = self.blocks_drag_start
+            cx, cy = self.blocks_drag_current
             v1x, v1y = self.camera.world_to_view(sx, sy)
             v2x, v2y = self.camera.world_to_view(cx, cy)
             x = self.sidebar_width + min(v1x, v2x)
             y = min(v1y, v2y)
             w = abs(v2x - v1x)
             h = abs(v2y - v1y)
-            # Border
             self.renderer.draw_color = (100, 160, 255, 255)
             self.renderer.draw_rect(sdl2rect.Rect(x, y, w, h))
-    
+
     def run(self):
-        """Main game loop"""
         running = True
         while running:
             running = self.handle_events()
-            # Poll for size change in case no VIDEORESIZE event was fired
             self._poll_size_change()
-            # If benchmarking finished and not yet ready, finalize renderer choice on main thread
-            if (not self.ready) and self._bench_done:
-                # Apply cfg and (re)create renderer if needed
+            if not self.ready and self._bench_done:
                 self.opt = self._bench_cfg or {}
-                # Prefer user renderer preference if set; otherwise fallback to optimization suggestion
-                pref = str(self.user_settings.get("renderer", "Auto")).lower() if hasattr(self, 'user_settings') else "auto"
-                if pref == "cpu":
+                pref = str(self.user_settings.get('renderer', 'Auto')).lower() if hasattr(self, 'user_settings') else 'auto'
+                if pref == 'cpu':
                     self.use_gpu = False
-                elif pref == "gpu":
+                elif pref == 'gpu':
                     self.use_gpu = bool(GPU_AVAILABLE)
                 else:
-                    self.use_gpu = bool(self.opt.get("use_gpu", GPU_AVAILABLE) and GPU_AVAILABLE)
-                self.target_fps = int(self.opt.get("target_fps", 60))
-                self.max_particles = int(self.opt.get("max_particles", 50000))
-
+                    self.use_gpu = bool(self.opt.get('use_gpu', GPU_AVAILABLE) and GPU_AVAILABLE)
+                self.target_fps = int(self.opt.get('target_fps', 60))
+                self.max_particles = int(self.opt.get('max_particles', 50000))
                 if self.use_gpu:
-                    # Close the CPU window before creating SDL2 Window/Renderer
                     try:
                         pygame.display.quit()
                     except Exception:
                         pass
-                    # Create GPU window/renderer
-                    self.window = Window("Dustground", size=(self.width, self.height))
+                    self.window = Window('Dustground', size=(self.width, self.height))
                     try:
                         self.window.resizable = True
                     except Exception:
                         pass
                     self.renderer = Renderer(self.window, vsync=True)
                     self._text_cache = {}
-                else:
-                    # Ensure display exists
-                    if not pygame.display.get_init():
-                        pygame.display.init()
-                        self.screen = pygame.display.set_mode((self.width, self.height), pygame.SCALED | pygame.DOUBLEBUF)
-                        pygame.display.set_caption("Dustground")
-
+                elif not pygame.display.get_init():
+                    pygame.display.init()
+                    self.screen = pygame.display.set_mode((self.width, self.height), pygame.SCALED | pygame.DOUBLEBUF)
+                    pygame.display.set_caption('Dustground')
                 self.ready = True
             self.update()
             self.draw()
-            
             self.clock.tick(self.target_fps)
             self.fps = int(self.clock.get_fps())
-            # Smoothed FPS for scaling decisions
             if self._fps_avg <= 0:
                 self._fps_avg = float(self.fps)
             else:
                 self._fps_avg = self._fps_avg * 0.9 + self.fps * 0.1
             self._frame_index += 1
 
-
 def main():
-    """Entry point"""
     game = ParticleGame()
     game.run()
+    try:
+        dg_discord.shutdown()
+    except Exception:
+        pass
     pygame.quit()
     sys.exit()
-
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

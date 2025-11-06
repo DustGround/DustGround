@@ -1,9 +1,8 @@
 import random
 import pygame
 
-
 class LavaParticle:
-    __slots__ = ("x", "y", "vx", "vy")
+    __slots__ = ('x', 'y', 'vx', 'vy')
 
     def __init__(self, x: float, y: float):
         self.x = float(x)
@@ -11,37 +10,25 @@ class LavaParticle:
         self.vx = 0.0
         self.vy = 0.0
 
-
 class LavaSystem:
-    """Simple lava fluid similar to water but heavier and more viscous.
-    - Moves downward due to gravity, spreads sideways slowly
-    - Collides with neighbors to avoid overlap
-    - Single-color batched rendering via get_point_groups()
-    """
 
     def __init__(self, width: int, height: int):
         self.width = width
         self.height = height
         self.particles: list[LavaParticle] = []
-        # Tunables (thick, slow lava)
-        self.gravity = 0.40
-        self.viscosity = 0.55  # much thicker than water
+        self.gravity = 0.4
+        self.viscosity = 0.55
         self.cell_size = 3
-        # Adaptive controls (mirrors WaterSystem fields for consistency)
         self.neighbor_radius = 2
         self.max_neighbors = 8
-        self.skip_mod = 1  # 1 = no skipping
-        # Spatial grid
+        self.skip_mod = 1
         self.grid: dict[tuple[int, int], list[LavaParticle]] = {}
-        # Render color
         self.color = (255, 110, 20)
-        # Optional solid query
         self._is_solid = None
 
     def set_obstacle_query(self, fn):
         self._is_solid = fn
 
-    # --- API ---
     def add_particle(self, x: float, y: float):
         if 0 <= x < self.width and 0 <= y < self.height:
             self.particles.append(LavaParticle(x, y))
@@ -64,9 +51,8 @@ class LavaSystem:
     def sweep_dead(self):
         if not self.particles:
             return
-        self.particles = [p for p in self.particles if not getattr(p, "dead", False)]
+        self.particles = [p for p in self.particles if not getattr(p, 'dead', False)]
 
-    # --- Simulation ---
     def _rebuild_grid(self):
         self.grid.clear()
         cs = self.cell_size
@@ -76,8 +62,7 @@ class LavaSystem:
             self.grid.setdefault((cx, cy), []).append(p)
 
     def _handle_collisions(self, frame_index: int):
-        # Optionally skip some frames
-        if self.skip_mod > 1 and (frame_index % self.skip_mod) != 0:
+        if self.skip_mod > 1 and frame_index % self.skip_mod != 0:
             return
         cs = self.cell_size
         radius = self.neighbor_radius
@@ -103,14 +88,12 @@ class LavaSystem:
                 d2 = dx * dx + dy * dy
                 if d2 < 2.5 * 2.5 and d2 > 0.01:
                     d = d2 ** 0.5
-                    nx, ny = dx / d, dy / d
-                    # Gentle separation and strong internal damping to keep the blob thick
+                    nx, ny = (dx / d, dy / d)
                     push = 0.08
                     p.vx += nx * push
                     p.vy += ny * push
                     q.vx -= nx * push * 0.5
                     q.vy -= ny * push * 0.5
-                    # Couple velocities (viscous stickiness)
                     blend = 0.06
                     dvx = (q.vx - p.vx) * blend
                     dvy = (q.vy - p.vy) * blend
@@ -120,23 +103,19 @@ class LavaSystem:
                     q.vy -= dvy
 
     def update(self, frame_index: int):
-        # Integrate
         for p in self.particles:
             p.vy += self.gravity
-            # Anisotropic damping: much stronger lateral damping than vertical
             damp_x = max(0.0, 1.0 - self.viscosity * 1.25)
-            damp_y = max(0.0, 1.0 - self.viscosity * 0.70)
+            damp_y = max(0.0, 1.0 - self.viscosity * 0.7)
             p.vx *= damp_x
             p.vy *= damp_y
             p.x += p.vx
             p.y += p.vy
-            # Block by solid
             if self._is_solid and self._is_solid(int(p.x), int(p.y)):
                 p.x -= p.vx
                 p.y -= p.vy
                 p.vx *= -0.15
                 p.vy *= -0.15
-            # Bounds
             if p.x < 0:
                 p.x = 0
                 p.vx *= -0.2
@@ -149,21 +128,16 @@ class LavaSystem:
             elif p.y > self.height - 1:
                 p.y = self.height - 1
                 p.vy *= -0.2
-
-        # Collisions
         self._rebuild_grid()
         self._handle_collisions(frame_index)
 
-    # --- Rendering helpers ---
     def draw(self, surf: pygame.Surface):
-        # Simple points
         col = self.color
         for p in self.particles:
-            x, y = int(p.x), int(p.y)
+            x, y = (int(p.x), int(p.y))
             if 0 <= x < self.width and 0 <= y < self.height:
                 surf.set_at((x, y), col)
 
     def get_point_groups(self):
-        # Single color
         points = [(int(p.x), int(p.y)) for p in self.particles]
         return (self.color, points)
