@@ -12,6 +12,7 @@ from src.lava import LavaSystem, LavaParticle
 from src.toxic import ToxicSystem
 from src.oil import OilSystem
 from src.metal import MetalSystem
+from src.air import AirSystem
 from src.blocks import BlocksSystem
 from src.blood import BloodSystem
 from src.npc import NPC
@@ -68,6 +69,7 @@ class ParticleGame:
         self.metal_system = MetalSystem(self.game_width, height)
         self.blood_system = BloodSystem(self.game_width, height)
         self.blocks_system = BlocksSystem(self.game_width, height)
+        self.air_system = AirSystem(self.game_width, height)
 
         def _is_solid_obstacle(x: int, y: int) -> bool:
             return self.metal_system.is_solid(x, y) or self.blocks_system.is_solid(x, y)
@@ -153,8 +155,16 @@ class ParticleGame:
         self._ui_oil_tex = None
         self._ui_metal_tex = None
         self._ui_blocks_tex = None
+        self._ui_air_tex = None
         self._ui_admin_tex = None
         self.ui_tiles = [{'key': 'blocks', 'label': 'BLOCKS', 'color': (180, 180, 190), 'surf': self.ui_blocks_surf}, {'key': 'sand', 'label': 'SAND', 'color': (200, 180, 120), 'surf': self.ui_sand_surf}, {'key': 'water', 'label': 'WATER', 'color': (80, 140, 255), 'surf': self.ui_water_surf}, {'key': 'oil', 'label': 'OIL', 'color': (60, 50, 30), 'surf': self.ui_oil_surf}, {'key': 'lava', 'label': 'LAVA', 'color': (255, 120, 60), 'surf': self.ui_lava_surf}, {'key': 'metal', 'label': 'METAL', 'color': (140, 140, 150), 'surf': self.ui_metal_surf}, {'key': 'toxic', 'label': 'TOXIC', 'color': (90, 220, 90), 'surf': self.ui_toxic_surf}, {'key': 'npc', 'label': 'NPC', 'color': (180, 180, 200), 'surf': self.ui_npc_surf}]
+        # Load AIR icon for spawn menu
+        self.ui_air_surf = self._load_image('src/assets/air.png')
+        if not self.ui_air_surf:
+            self.ui_air_surf = pygame.Surface((64, 64), pygame.SRCALPHA)
+            self.ui_air_surf.fill((180, 210, 255, 20))
+        # Append AIR to tiles (no placement action; it's a world overlay)
+        self.ui_tiles.append({'key': 'air', 'label': 'AIR', 'color': (180, 210, 255), 'surf': self.ui_air_surf})
         self.ui_tile_rects = {}
         self.ui_spawn_search_text = ''
         self.ui_search_active = False
@@ -1135,6 +1145,42 @@ class ParticleGame:
                 self.lava_system.draw(game_surface)
                 self.toxic_system.draw(game_surface)
                 self.blood_system.draw(game_surface)
+                # Rebuild and draw air overlay last so it sits above other materials
+                try:
+                    sources = []
+                    for sys in (self.blocks_system, self.metal_system, self.sand_system, self.water_system, self.oil_system, self.lava_system, self.toxic_system, self.blood_system):
+                        try:
+                            pg = sys.get_point_groups()
+                            if isinstance(pg, tuple) and len(pg) == 2 and isinstance(pg[1], list):
+                                # Single group style
+                                sources.append(pg)
+                            elif isinstance(pg, dict):
+                                for col, pts in pg.items():
+                                    sources.append((col, pts))
+                        except Exception:
+                            pass
+                    self.air_system.rebuild(sources)
+                    self.air_system.draw(game_surface)
+                except Exception:
+                    pass
+                try:
+                    sources = []
+                    for sys in (self.blocks_system, self.metal_system, self.sand_system, self.water_system, self.oil_system, self.lava_system, self.toxic_system, self.blood_system):
+                        try:
+                            pg = sys.get_point_groups()
+                            if isinstance(pg, tuple) and len(pg) == 2 and isinstance(pg[1], list):
+                                sources.append(pg)
+                            elif isinstance(pg, dict):
+                                for col, pts in pg.items():
+                                    sources.append((col, pts))
+                        except Exception:
+                            pass
+                    self.air_system.rebuild(sources)
+                    # GPU path: draw via CPU surface then blit texture
+                    # We'll composite air into cpu_layer before presenting
+                    self.air_system.draw(cpu_layer)
+                except Exception:
+                    pass
                 if getattr(self, 'npcs', None):
                     for npc in self.npcs:
                         try:
