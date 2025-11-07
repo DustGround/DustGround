@@ -26,7 +26,10 @@ def _try_clear_system(sys_obj: Any):
                 pass
 
 def clear_everything(game: Any) -> None:
-    for name in ('sand_system', 'water_system', 'oil_system', 'lava_system', 'toxic_system', 'metal_system', 'blood_system', 'blocks_system'):
+    for name in (
+        'sand_system', 'water_system', 'oil_system', 'lava_system', 'toxic_system',
+        'metal_system', 'blood_system', 'blocks_system', 'dirt_system'
+    ):
         sys_obj = getattr(game, name, None)
         _try_clear_system(sys_obj)
     if hasattr(game, 'npc'):

@@ -12,6 +12,7 @@ from src.lava import LavaSystem, LavaParticle
 from src.toxic import ToxicSystem
 from src.oil import OilSystem
 from src.metal import MetalSystem
+from src.dirt import DirtSystem
 from src.air import AirSystem
 from src.blocks import BlocksSystem
 from src.blood import BloodSystem
@@ -67,6 +68,7 @@ class ParticleGame:
         self.toxic_system = ToxicSystem(self.game_width, height)
         self.oil_system = OilSystem(self.game_width, height)
         self.metal_system = MetalSystem(self.game_width, height)
+        self.dirt_system = DirtSystem(self.game_width, height)
         self.blood_system = BloodSystem(self.game_width, height)
         self.blocks_system = BlocksSystem(self.game_width, height)
         self.air_system = AirSystem(self.game_width, height)
@@ -75,6 +77,7 @@ class ParticleGame:
             return self.metal_system.is_solid(x, y) or self.blocks_system.is_solid(x, y)
         self._is_solid_obstacle = _is_solid_obstacle
         self.sand_system.set_obstacle_query(self._is_solid_obstacle)
+        self.dirt_system.set_obstacle_query(self._is_solid_obstacle)
         self.water_system.set_obstacle_query(self._is_solid_obstacle)
         self.lava_system.set_obstacle_query(self._is_solid_obstacle)
         self.toxic_system.set_obstacle_query(self._is_solid_obstacle)
@@ -142,6 +145,10 @@ class ParticleGame:
         if not self.ui_metal_surf:
             self.ui_metal_surf = pygame.Surface((64, 64), pygame.SRCALPHA)
             self.ui_metal_surf.fill((140, 140, 150, 255))
+        self.ui_dirt_surf = self._load_image('src/assets/dirt.png')
+        if not self.ui_dirt_surf:
+            self.ui_dirt_surf = pygame.Surface((64, 64), pygame.SRCALPHA)
+            self.ui_dirt_surf.fill((130, 100, 70, 255))
         self.ui_blocks_surf = self._load_image('src/assets/blocks.png')
         if not self.ui_blocks_surf:
             self.ui_blocks_surf = pygame.Surface((64, 64), pygame.SRCALPHA)
@@ -154,10 +161,11 @@ class ParticleGame:
         self._ui_toxic_tex = None
         self._ui_oil_tex = None
         self._ui_metal_tex = None
+        self._ui_dirt_tex = None
         self._ui_blocks_tex = None
         self._ui_air_tex = None
         self._ui_admin_tex = None
-        self.ui_tiles = [{'key': 'blocks', 'label': 'BLOCKS', 'color': (180, 180, 190), 'surf': self.ui_blocks_surf}, {'key': 'sand', 'label': 'SAND', 'color': (200, 180, 120), 'surf': self.ui_sand_surf}, {'key': 'water', 'label': 'WATER', 'color': (80, 140, 255), 'surf': self.ui_water_surf}, {'key': 'oil', 'label': 'OIL', 'color': (60, 50, 30), 'surf': self.ui_oil_surf}, {'key': 'lava', 'label': 'LAVA', 'color': (255, 120, 60), 'surf': self.ui_lava_surf}, {'key': 'metal', 'label': 'METAL', 'color': (140, 140, 150), 'surf': self.ui_metal_surf}, {'key': 'toxic', 'label': 'TOXIC', 'color': (90, 220, 90), 'surf': self.ui_toxic_surf}, {'key': 'npc', 'label': 'NPC', 'color': (180, 180, 200), 'surf': self.ui_npc_surf}]
+        self.ui_tiles = [{'key': 'blocks', 'label': 'BLOCKS', 'color': (180, 180, 190), 'surf': self.ui_blocks_surf}, {'key': 'sand', 'label': 'SAND', 'color': (200, 180, 120), 'surf': self.ui_sand_surf}, {'key': 'dirt', 'label': 'DIRT', 'color': (130, 100, 70), 'surf': self.ui_dirt_surf}, {'key': 'water', 'label': 'WATER', 'color': (80, 140, 255), 'surf': self.ui_water_surf}, {'key': 'oil', 'label': 'OIL', 'color': (60, 50, 30), 'surf': self.ui_oil_surf}, {'key': 'lava', 'label': 'LAVA', 'color': (255, 120, 60), 'surf': self.ui_lava_surf}, {'key': 'metal', 'label': 'METAL', 'color': (140, 140, 150), 'surf': self.ui_metal_surf}, {'key': 'toxic', 'label': 'TOXIC', 'color': (90, 220, 90), 'surf': self.ui_toxic_surf}, {'key': 'npc', 'label': 'NPC', 'color': (180, 180, 200), 'surf': self.ui_npc_surf}]
         # Load AIR icon for spawn menu
         self.ui_air_surf = self._load_image('src/assets/air.png')
         if not self.ui_air_surf:
@@ -635,7 +643,7 @@ class ParticleGame:
             return
         view_x = mouse_x - self.sidebar_width
         game_x, game_y = self.camera.view_to_world(view_x, mouse_y)
-        total = self.sand_system.get_particle_count() + self.water_system.get_particle_count() + self.oil_system.get_particle_count() + self.lava_system.get_particle_count() + self.toxic_system.get_particle_count() + self.metal_system.get_particle_count() + self.blood_system.get_particle_count()
+        total = self.sand_system.get_particle_count() + self.water_system.get_particle_count() + (self.oil_system.get_particle_count() if hasattr(self, 'oil_system') else 0) + self.lava_system.get_particle_count() + self.toxic_system.get_particle_count() + self.metal_system.get_particle_count() + self.blood_system.get_particle_count() + (self.dirt_system.get_particle_count() if hasattr(self, 'dirt_system') else 0)
         if total >= self.max_particles:
             if self.current_tool != 'npc':
                 return
@@ -658,6 +666,14 @@ class ParticleGame:
         elif self.current_tool == 'toxic':
             self.toxic_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
             placed = True
+        elif self.current_tool == 'dirt':
+            if hasattr(self, 'dirt_system'):
+                self.dirt_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
+                placed = True
+        elif self.current_tool == 'dirt':
+            if hasattr(self, 'dirt_system'):
+                self.dirt_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
+                placed = True
         elif self.current_tool == 'npc':
             if self.active_npc is not None and self.npc_drag_index is not None:
                 try:
@@ -813,6 +829,18 @@ class ParticleGame:
                 cell = (cell_x + dx, cell_y + dy)
                 if cell in self.oil_system.grid:
                     nearby.extend(self.oil_system.grid[cell])
+        return nearby
+
+    def _get_nearby_dirt(self, x: float, y: float, radius: int=2) -> list:
+        if not hasattr(self, 'dirt_system'):
+            return []
+        cell_x, cell_y = (int(x // self.dirt_system.cell_size), int(y // self.dirt_system.cell_size))
+        nearby = []
+        for dx in range(-radius, radius + 1):
+            for dy in range(-radius, radius + 1):
+                cell = (cell_x + dx, cell_y + dy)
+                if cell in self.dirt_system.grid:
+                    nearby.extend(self.dirt_system.grid[cell])
         return nearby
 
     def _find_nearest_npc(self, x: float, y: float, max_dist: float=40.0):
@@ -1041,6 +1069,8 @@ class ParticleGame:
         self.lava_system.update(self._frame_index)
         self.toxic_system.update(self._frame_index)
         self.metal_system.update(self._frame_index)
+        if hasattr(self, 'dirt_system'):
+            self.dirt_system.update(self._frame_index)
         self.blocks_system.update(self._frame_index)
         dt = 1.0 / max(self.target_fps, 1)
         if self.npcs:
@@ -1138,6 +1168,8 @@ class ParticleGame:
                     self.grid_bg.draw_cpu(game_surface, self.camera)
                 self.blocks_system.draw(game_surface)
                 self.metal_system.draw(game_surface)
+                if hasattr(self, 'dirt_system'):
+                    self.dirt_system.draw(game_surface)
                 self.sand_system.draw(game_surface)
                 self.water_system.draw(game_surface)
                 if hasattr(self, 'oil_system'):
@@ -1148,7 +1180,7 @@ class ParticleGame:
                 # Rebuild and draw air overlay last so it sits above other materials
                 try:
                     sources = []
-                    for sys in (self.blocks_system, self.metal_system, self.sand_system, self.water_system, self.oil_system, self.lava_system, self.toxic_system, self.blood_system):
+                    for sys in (self.blocks_system, self.metal_system, getattr(self, 'dirt_system', None), self.sand_system, self.water_system, self.oil_system, self.lava_system, self.toxic_system, self.blood_system):
                         try:
                             pg = sys.get_point_groups()
                             if isinstance(pg, tuple) and len(pg) == 2 and isinstance(pg[1], list):
@@ -1165,7 +1197,7 @@ class ParticleGame:
                     pass
                 try:
                     sources = []
-                    for sys in (self.blocks_system, self.metal_system, self.sand_system, self.water_system, self.oil_system, self.lava_system, self.toxic_system, self.blood_system):
+                    for sys in (self.blocks_system, self.metal_system, getattr(self, 'dirt_system', None), self.sand_system, self.water_system, self.oil_system, self.lava_system, self.toxic_system, self.blood_system):
                         try:
                             pg = sys.get_point_groups()
                             if isinstance(pg, tuple) and len(pg) == 2 and isinstance(pg[1], list):
@@ -1210,7 +1242,10 @@ class ParticleGame:
                 now = time.time()
                 if now - self._stats_updated_at > 0.25:
                     self._stats_updated_at = now
-                    parts = [f'Blocks: {self.blocks_system.get_particle_count()}', f'Metal: {self.metal_system.get_particle_count()}', f'Sand: {self.sand_system.get_particle_count()}', f'Water: {self.water_system.get_particle_count()}']
+                    parts = [f'Blocks: {self.blocks_system.get_particle_count()}', f'Metal: {self.metal_system.get_particle_count()}']
+                    if hasattr(self, 'dirt_system'):
+                        parts.append(f'Dirt: {self.dirt_system.get_particle_count()}')
+                    parts.extend([f'Sand: {self.sand_system.get_particle_count()}', f'Water: {self.water_system.get_particle_count()}'])
                     if hasattr(self, 'oil_system'):
                         parts.append(f'Oil: {self.oil_system.get_particle_count()}')
                     parts.extend([f'Lava: {self.lava_system.get_particle_count()}', f'Toxic: {self.toxic_system.get_particle_count()}', f'Blood: {self.blood_system.get_particle_count()}'])
@@ -1244,6 +1279,8 @@ class ParticleGame:
                 self.grid_bg.draw_cpu(cpu_layer, self.camera)
             self.blocks_system.draw(cpu_layer)
             self.metal_system.draw(cpu_layer)
+            if hasattr(self, 'dirt_system'):
+                self.dirt_system.draw(cpu_layer)
             self.sand_system.draw(cpu_layer)
             self.water_system.draw(cpu_layer)
             if hasattr(self, 'oil_system'):
@@ -1265,6 +1302,18 @@ class ParticleGame:
             tex = Texture.from_surface(self.renderer, scaled)
             self.renderer.copy(tex, dstrect=sdl2rect.Rect(self.sidebar_width, 0, self.game_width, self.height))
         else:
+            if hasattr(self, 'dirt_system'):
+                try:
+                    dirt_groups = self.dirt_system.get_point_groups()
+                    if hasattr(dirt_groups, 'items'):
+                        for color, pts in dirt_groups.items():
+                            if not pts:
+                                continue
+                            pts_offset = [(x + self.sidebar_width, y) for x, y in pts]
+                            self.renderer.draw_color = (color[0], color[1], color[2], 255)
+                            self.renderer.draw_points(pts_offset)
+                except Exception:
+                    pass
             sand_groups = self.sand_system.get_point_groups()
             for color, pts in sand_groups.items():
                 if not pts:
@@ -1335,7 +1384,10 @@ class ParticleGame:
         now = time.time()
         if self._stats_cache_tex is None or now - self._stats_updated_at > 0.25:
             self._stats_updated_at = now
-            parts = [f'Blocks: {self.blocks_system.get_particle_count()}', f'Metal: {self.metal_system.get_particle_count()}', f'Sand: {self.sand_system.get_particle_count()}', f'Water: {self.water_system.get_particle_count()}']
+            parts = [f'Blocks: {self.blocks_system.get_particle_count()}', f'Metal: {self.metal_system.get_particle_count()}']
+            if hasattr(self, 'dirt_system'):
+                parts.append(f'Dirt: {self.dirt_system.get_particle_count()}')
+            parts.extend([f'Sand: {self.sand_system.get_particle_count()}', f'Water: {self.water_system.get_particle_count()}'])
             if hasattr(self, 'oil_system'):
                 parts.append(f'Oil: {self.oil_system.get_particle_count()}')
             parts.extend([f'Lava: {self.lava_system.get_particle_count()}', f'Toxic: {self.toxic_system.get_particle_count()}', f'Blood: {self.blood_system.get_particle_count()}'])
