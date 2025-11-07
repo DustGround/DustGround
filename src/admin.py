@@ -61,3 +61,7 @@ def clear_living(game: Any) -> None:
         game.npc_drag_index = None
     if hasattr(game, 'npc'):
         game.npc = None
+
+def clear_blocks(game: Any) -> None:
+    sys_obj = getattr(game, 'blocks_system', None)
+    _try_clear_system(sys_obj)

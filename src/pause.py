@@ -111,12 +111,12 @@ class PauseMenu:
     def draw_cpu(self, screen: pygame.Surface, left_margin: int=64) -> None:
         width, height = screen.get_size()
         center_y = height // 2
-        title = 'paused'
-        title_surf = self.title_font.render(title, True, (220, 220, 220))
-        screen.blit(title_surf, (left_margin, 40))
         if self.state == 'plugins':
             self.plugin_panel.draw_cpu(screen)
             return
+        title = 'paused'
+        title_surf = self.title_font.render(title, True, (220, 220, 220))
+        screen.blit(title_surf, (left_margin, 40))
         spacing = self.item_font.get_height() + 12
         items_h = len(self.options) * spacing
         start_y = center_y - items_h // 2
@@ -148,11 +148,6 @@ class PauseMenu:
         return (tex, surf)
 
     def draw_gpu(self, renderer, left_margin: int=64) -> None:
-        title = 'paused'
-        title_surf = self.title_font.render(title, True, (220, 220, 220))
-        title_tex = Texture.from_surface(renderer, title_surf) if Texture is not None else None
-        if title_tex is not None and sdl2rect is not None:
-            renderer.copy(title_tex, dstrect=sdl2rect.Rect(left_margin, 40, title_surf.get_width(), title_surf.get_height()))
         try:
             out_w, out_h = renderer.output_size
         except Exception:
@@ -161,6 +156,11 @@ class PauseMenu:
         if self.state == 'plugins':
             self.plugin_panel.draw_gpu(renderer)
             return
+        title = 'paused'
+        title_surf = self.title_font.render(title, True, (220, 220, 220))
+        title_tex = Texture.from_surface(renderer, title_surf) if Texture is not None else None
+        if title_tex is not None and sdl2rect is not None:
+            renderer.copy(title_tex, dstrect=sdl2rect.Rect(left_margin, 40, title_surf.get_width(), title_surf.get_height()))
         spacing = self.item_font.get_height() + 12
         items_h = len(self.options) * spacing
         start_y = center_y - items_h // 2

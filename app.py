@@ -18,7 +18,7 @@ from src.npc import NPC
 from src.opt import get_or_create_optimizations
 from src.scaling import recommend_settings
 from src.zoom import Camera
-from src.admin import clear_everything, clear_living
+from src.admin import clear_everything, clear_living, clear_blocks
 from src.bg import GridBackground
 from src.menu import MainMenu
 from src.pause import PauseMenu
@@ -105,7 +105,7 @@ class ParticleGame:
         self.ui_show_admin = False
         self.ui_icon_size = 56
         self.ui_menu_size = (460, 340)
-        self.ui_admin_menu_size = (300, 160)
+        self.ui_admin_menu_size = (300, 220)
         self.ui_header_h = 36
         self.ui_grid_cols = 4
         self.ui_flask_surf = self._load_image('src/assets/flask.png')
@@ -156,6 +156,8 @@ class ParticleGame:
         self._ui_admin_tex = None
         self.ui_tiles = [{'key': 'blocks', 'label': 'BLOCKS', 'color': (180, 180, 190), 'surf': self.ui_blocks_surf}, {'key': 'sand', 'label': 'SAND', 'color': (200, 180, 120), 'surf': self.ui_sand_surf}, {'key': 'water', 'label': 'WATER', 'color': (80, 140, 255), 'surf': self.ui_water_surf}, {'key': 'oil', 'label': 'OIL', 'color': (60, 50, 30), 'surf': self.ui_oil_surf}, {'key': 'lava', 'label': 'LAVA', 'color': (255, 120, 60), 'surf': self.ui_lava_surf}, {'key': 'metal', 'label': 'METAL', 'color': (140, 140, 150), 'surf': self.ui_metal_surf}, {'key': 'toxic', 'label': 'TOXIC', 'color': (90, 220, 90), 'surf': self.ui_toxic_surf}, {'key': 'npc', 'label': 'NPC', 'color': (180, 180, 200), 'surf': self.ui_npc_surf}]
         self.ui_tile_rects = {}
+        self.ui_spawn_search_text = ''
+        self.ui_search_active = False
         self._layout_overlay_ui()
         self.fps = 0
         self._stats_cache_tex = None
@@ -247,6 +249,20 @@ class ParticleGame:
         except Exception:
             return None
 
+    def _get_filtered_tiles(self):
+        q = getattr(self, 'ui_spawn_search_text', '') or ''
+        tiles = list(getattr(self, 'ui_tiles', []))
+        if not q:
+            return tiles
+        ql = q.lower()
+        out = []
+        for t in tiles:
+            key = str(t.get('key', ''))
+            label = str(t.get('label', ''))
+            if ql in key.lower() or ql in label.lower():
+                out.append(t)
+        return out
+
     def _layout_overlay_ui(self):
         self.ui_flask_rect = pygame.Rect(10, 10, self.ui_icon_size, self.ui_icon_size)
         self.ui_admin_rect = pygame.Rect(self.ui_flask_rect.right + 8, 10, self.ui_icon_size, self.ui_icon_size)
@@ -258,10 +274,13 @@ class ParticleGame:
         gap = 10
         header_h = getattr(self, 'ui_header_h', 36)
         area_x = self.ui_menu_rect.x + gpad
-        area_y = self.ui_menu_rect.y + header_h + gpad
+        search_h = 26
+        spad = 4
+        self.ui_search_rect = pygame.Rect(area_x, self.ui_menu_rect.y + header_h + spad, mw - 2 * gpad, search_h)
+        area_y = self.ui_search_rect.bottom + gpad
         area_w = mw - 2 * gpad
-        area_h = mh - header_h - 2 * gpad - 20
-        tiles = getattr(self, 'ui_tiles', [])
+        area_h = mh - header_h - 2 * gpad - 20 - (search_h + spad)
+        tiles = self._get_filtered_tiles()
         n = len(tiles)
         min_tile_w = 48
         max_tile_w = 72
@@ -273,7 +292,7 @@ class ParticleGame:
         tile_w = max(min_tile_w, min(max_tile_w, tile_w_avail))
         tile_h = max(48, min(72, tile_h_avail))
         self.ui_tile_rects = {}
-        for idx, tile in enumerate(getattr(self, 'ui_tiles', [])):
+        for idx, tile in enumerate(tiles):
             r = idx // cols
             c = idx % cols
             x = area_x + c * (tile_w + gap)
@@ -335,6 +354,8 @@ class ParticleGame:
                         self.ui_show_spawn = not self.ui_show_spawn
                         if self.ui_show_spawn:
                             setattr(self, 'ui_show_admin', False)
+                            self._layout_overlay_ui()
+                            self.ui_search_active = False
                         continue
                     if hasattr(self, 'ui_admin_rect') and self.ui_admin_rect.collidepoint(mx, my):
                         self.ui_show_admin = not getattr(self, 'ui_show_admin', False)
@@ -342,10 +363,14 @@ class ParticleGame:
                             self.ui_show_spawn = False
                         continue
                     if self.ui_show_spawn and self.ui_menu_rect.collidepoint(mx, my):
-                        for key, rect in getattr(self, 'ui_tile_rects', {}).items():
-                            if rect.collidepoint(mx, my):
-                                self.current_tool = key
-                                break
+                        if hasattr(self, 'ui_search_rect') and self.ui_search_rect.collidepoint(mx, my):
+                            self.ui_search_active = True
+                        else:
+                            self.ui_search_active = False
+                            for key, rect in getattr(self, 'ui_tile_rects', {}).items():
+                                if rect.collidepoint(mx, my):
+                                    self.current_tool = key
+                                    break
                         continue
                     if getattr(self, 'ui_show_admin', False) and hasattr(self, 'ui_admin_menu_rect') and self.ui_admin_menu_rect.collidepoint(mx, my):
                         if hasattr(self, 'ui_admin_clear_rect') and self.ui_admin_clear_rect and self.ui_admin_clear_rect.collidepoint(mx, my):
@@ -380,6 +405,16 @@ class ParticleGame:
                                     self.npc_drag_index = None
                                     if hasattr(self, 'npc'):
                                         self.npc = None
+                                except Exception:
+                                    pass
+                            continue
+                        if hasattr(self, 'ui_admin_clear_blocks_rect') and self.ui_admin_clear_blocks_rect and self.ui_admin_clear_blocks_rect.collidepoint(mx, my):
+                            try:
+                                clear_blocks(self)
+                            except Exception:
+                                try:
+                                    if hasattr(self, 'blocks_system'):
+                                        self.blocks_system.clear()
                                 except Exception:
                                     pass
                             continue
@@ -458,6 +493,20 @@ class ParticleGame:
                 if event.key == pygame.K_ESCAPE:
                     self.show_pause_menu = True
                     continue
+                if self.ui_show_spawn and getattr(self, 'ui_search_active', False):
+                    if event.key == pygame.K_BACKSPACE:
+                        if self.ui_spawn_search_text:
+                            self.ui_spawn_search_text = self.ui_spawn_search_text[:-1]
+                            self._layout_overlay_ui()
+                        continue
+                    elif event.key == pygame.K_RETURN:
+                        continue
+                    else:
+                        ch = getattr(event, 'unicode', '')
+                        if ch and ch.isprintable() and not ch.isspace() or ch == ' ':
+                            self.ui_spawn_search_text = (self.ui_spawn_search_text or '') + ch
+                            self._layout_overlay_ui()
+                            continue
                 mods = pygame.key.get_mods()
                 if mods & pygame.KMOD_CTRL:
                     mx, my = pygame.mouse.get_pos()
@@ -995,7 +1044,15 @@ class ParticleGame:
                         pass
         if self.npcs:
             self._npc_particle_coupling()
-        self._handle_cross_material_collisions()
+        try:
+            from src import reactions as dg_react
+            dg_react.apply(self)
+        except Exception:
+            # Fallback to legacy local interactions if reactions module fails
+            try:
+                self._handle_cross_material_collisions()
+            except Exception:
+                pass
         self._handle_npc_hazards()
 
     def draw_sidebar(self):
@@ -1345,6 +1402,21 @@ class ParticleGame:
             title_text = self.button_font.render('SPAWN', True, (220, 220, 220))
             ty = self.ui_menu_rect.y + (header_h - title_text.get_height()) // 2
             self.screen.blit(title_text, (self.ui_menu_rect.x + 12, ty))
+            if hasattr(self, 'ui_search_rect'):
+                sr = self.ui_search_rect
+                pygame.draw.rect(self.screen, (30, 30, 30), sr, border_radius=6)
+                pygame.draw.rect(self.screen, (70, 70, 70), sr, width=1, border_radius=6)
+                q = self.ui_spawn_search_text or ''
+                placeholder = 'Search'
+                show_text = q if q else placeholder
+                color = (220, 220, 220) if q else (150, 150, 150)
+                ts = self.button_font.render(show_text, True, color)
+                self.screen.blit(ts, (sr.x + 8, sr.y + (sr.h - ts.get_height()) // 2))
+                if self.ui_search_active:
+                    cx = sr.x + 8 + ts.get_width()
+                    cy0 = sr.y + 5
+                    cy1 = sr.y + sr.h - 5
+                    pygame.draw.line(self.screen, (200, 200, 200), (cx, cy0), (cx, cy1), 1)
             mx, my = pygame.mouse.get_pos()
             for tile in getattr(self, 'ui_tiles', []):
                 rect = self.ui_tile_rects.get(tile['key']) if hasattr(self, 'ui_tile_rects') else None
@@ -1418,6 +1490,16 @@ class ParticleGame:
             lrx2 = self.ui_admin_clear_npcs_rect.x + (self.ui_admin_clear_npcs_rect.w - label2.get_width()) // 2
             lry2 = self.ui_admin_clear_npcs_rect.y + (self.ui_admin_clear_npcs_rect.h - label2.get_height()) // 2
             self.screen.blit(label2, (lrx2, lry2))
+            btn_y3 = btn_y2 + btn_h + 12
+            self.ui_admin_clear_blocks_rect = pygame.Rect(btn_x, btn_y3, btn_w, btn_h)
+            hovered3 = self.ui_admin_clear_blocks_rect.collidepoint(pygame.mouse.get_pos())
+            pygame.draw.rect(self.screen, (30, 30, 30), self.ui_admin_clear_blocks_rect, border_radius=8)
+            if hovered3:
+                pygame.draw.rect(self.screen, (60, 60, 60), self.ui_admin_clear_blocks_rect, 0, border_radius=8)
+            label3 = self.button_font.render('CLEAR ALL BLOCKS', True, (220, 220, 220))
+            lrx3 = self.ui_admin_clear_blocks_rect.x + (self.ui_admin_clear_blocks_rect.w - label3.get_width()) // 2
+            lry3 = self.ui_admin_clear_blocks_rect.y + (self.ui_admin_clear_blocks_rect.h - label3.get_height()) // 2
+            self.screen.blit(label3, (lrx3, lry3))
         if self.current_tool == 'blocks' and self.blocks_drag_active and self.blocks_drag_start and self.blocks_drag_current:
             sx, sy = self.blocks_drag_start
             cx, cy = self.blocks_drag_current
@@ -1504,6 +1586,25 @@ class ParticleGame:
             title_surf = self.button_font.render(title, True, (220, 220, 220))
             ty = self.ui_menu_rect.y + (header_h - title_surf.get_height()) // 2
             self.renderer.copy(title_tex, dstrect=sdl2rect.Rect(self.ui_menu_rect.x + 12, ty, title_surf.get_width(), title_surf.get_height()))
+            if hasattr(self, 'ui_search_rect'):
+                sr = self.ui_search_rect
+                self.renderer.draw_color = (30, 30, 30, 255)
+                self.renderer.fill_rect(sdl2rect.Rect(sr.x, sr.y, sr.w, sr.h))
+                self.renderer.draw_color = (70, 70, 70, 255)
+                self.renderer.draw_rect(sdl2rect.Rect(sr.x, sr.y, sr.w, sr.h))
+                q = self.ui_spawn_search_text or ''
+                placeholder = 'Search'
+                show_text = q if q else placeholder
+                color = (220, 220, 220) if q else (150, 150, 150)
+                ts = self.button_font.render(show_text, True, color)
+                tex = self._get_text_texture(show_text, color)
+                tx = sr.x + 8
+                ty2 = sr.y + (sr.h - ts.get_height()) // 2
+                self.renderer.copy(tex, dstrect=sdl2rect.Rect(tx, ty2, ts.get_width(), ts.get_height()))
+                if self.ui_search_active:
+                    cx = tx + ts.get_width()
+                    self.renderer.draw_color = (200, 200, 200, 255)
+                    self.renderer.draw_line((cx, sr.y + 5), (cx, sr.y + sr.h - 5))
             mx, my = pygame.mouse.get_pos()
             for tile in getattr(self, 'ui_tiles', []):
                 rect = self.ui_tile_rects.get(tile['key']) if hasattr(self, 'ui_tile_rects') else None
@@ -1598,6 +1699,16 @@ class ParticleGame:
             lrx2 = btn_x + (btn_w - lbl2_surf.get_width()) // 2
             lry2 = btn_y2 + (btn_h - lbl2_surf.get_height()) // 2
             self.renderer.copy(lbl2_tex, dstrect=sdl2rect.Rect(lrx2, lry2, lbl2_surf.get_width(), lbl2_surf.get_height()))
+            btn_y3 = btn_y2 + btn_h + 12
+            self.ui_admin_clear_blocks_rect = pygame.Rect(btn_x, btn_y3, btn_w, btn_h)
+            self.renderer.draw_color = (30, 30, 30, 255)
+            self.renderer.fill_rect(sdl2rect.Rect(btn_x, btn_y3, btn_w, btn_h))
+            lbl3 = 'CLEAR ALL BLOCKS'
+            lbl3_surf = self.button_font.render(lbl3, True, (220, 220, 220))
+            lbl3_tex = self._get_text_texture(lbl3, (220, 220, 220))
+            lrx3 = btn_x + (btn_w - lbl3_surf.get_width()) // 2
+            lry3 = btn_y3 + (btn_h - lbl3_surf.get_height()) // 2
+            self.renderer.copy(lbl3_tex, dstrect=sdl2rect.Rect(lrx3, lry3, lbl3_surf.get_width(), lbl3_surf.get_height()))
         if self.current_tool == 'blocks' and self.blocks_drag_active and self.blocks_drag_start and self.blocks_drag_current:
             sx, sy = self.blocks_drag_start
             cx, cy = self.blocks_drag_current

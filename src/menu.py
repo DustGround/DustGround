@@ -543,9 +543,6 @@ class MainMenu:
                     s = self.item_font.render(l, True, (220, 220, 220))
                     screen.blit(s, (bx + pad, yy))
                     yy += self.item_font.get_height() + 4
-            hint = 'Enter: Toggle/Next • Tab: Switch Pane • Right Click/Backspace: Back'
-            hint_surf = self.item_font.render(hint, True, (140, 140, 140))
-            screen.blit(hint_surf, (left_margin, height - 44))
             return
         spacing = self.item_font.get_height() + 12
         items_h = len(self.options) * spacing
@@ -762,10 +759,6 @@ class MainMenu:
                         yy += self.item_font.get_height() + 4
                 except Exception:
                     pass
-            hint = 'Enter: Toggle/Next • Tab: Switch Pane • Right Click/Backspace: Back'
-            hint_surf = self.item_font.render(hint, True, (140, 140, 140))
-            hint_tex = Texture.from_surface(renderer, hint_surf)
-            renderer.copy(hint_tex, dstrect=sdl2rect.Rect(left_margin, out_h - 44, hint_surf.get_width(), hint_surf.get_height()))
             return
         title = 'Dustground'
         title_surf = self.title_font.render(title, True, (220, 220, 220))
