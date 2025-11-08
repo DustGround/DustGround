@@ -27,7 +27,7 @@ def _try_clear_system(sys_obj: Any):
 
 def clear_everything(game: Any) -> None:
     for name in (
-        'sand_system', 'water_system', 'oil_system', 'lava_system', 'toxic_system',
+        'sand_system', 'water_system', 'oil_system', 'lava_system', 'blue_lava_system', 'toxic_system',
         'metal_system', 'blood_system', 'blocks_system', 'dirt_system', 'milk_system'
     ):
         sys_obj = getattr(game, name, None)

@@ -9,6 +9,7 @@ from typing import Tuple, Dict, List, Tuple as Tup
 from src.sand import SandSystem, SandParticle
 from src.water import WaterSystem, WaterParticle
 from src.lava import LavaSystem, LavaParticle
+from src.bluelava import BlueLavaSystem, BlueLavaParticle
 from src.toxic import ToxicSystem
 from src.oil import OilSystem
 from src.metal import MetalSystem
@@ -65,6 +66,7 @@ class ParticleGame:
         self.sand_system = SandSystem(self.game_width, height)
         self.water_system = WaterSystem(self.game_width, height)
         self.lava_system = LavaSystem(self.game_width, height)
+        self.blue_lava_system = BlueLavaSystem(self.game_width, height)
         self.toxic_system = ToxicSystem(self.game_width, height)
         self.oil_system = OilSystem(self.game_width, height)
         self.metal_system = MetalSystem(self.game_width, height)
@@ -80,6 +82,7 @@ class ParticleGame:
         self.dirt_system.set_obstacle_query(self._is_solid_obstacle)
         self.water_system.set_obstacle_query(self._is_solid_obstacle)
         self.lava_system.set_obstacle_query(self._is_solid_obstacle)
+        self.blue_lava_system.set_obstacle_query(self._is_solid_obstacle)
         self.toxic_system.set_obstacle_query(self._is_solid_obstacle)
         self.oil_system.set_obstacle_query(self._is_solid_obstacle)
         self.blood_system.set_obstacle_query(self._is_solid_obstacle)
@@ -163,6 +166,7 @@ class ParticleGame:
         self._ui_water_tex = None
         self._ui_sand_tex = None
         self._ui_lava_tex = None
+        self._ui_blue_lava_tex = None
         self._ui_npc_tex = None
         self._ui_toxic_tex = None
         self._ui_oil_tex = None
@@ -178,6 +182,7 @@ class ParticleGame:
             {'key': 'water', 'label': 'WATER', 'color': (80, 140, 255), 'surf': self.ui_water_surf},
             {'key': 'oil', 'label': 'OIL', 'color': (60, 50, 30), 'surf': self.ui_oil_surf},
             {'key': 'lava', 'label': 'LAVA', 'color': (255, 120, 60), 'surf': self.ui_lava_surf},
+            {'key': 'bluelava', 'label': 'BLUE LAVA', 'color': (70, 170, 255), 'surf': self._load_image('src/assets/bluelava.png') or self.ui_lava_surf},
             {'key': 'metal', 'label': 'METAL', 'color': (140, 140, 150), 'surf': self.ui_metal_surf},
             {'key': 'toxic', 'label': 'TOXIC', 'color': (90, 220, 90), 'surf': self.ui_toxic_surf},
             {'key': 'milk', 'label': 'MILK', 'color': (240, 240, 245), 'surf': self.ui_milk_surf},
@@ -411,6 +416,8 @@ class ParticleGame:
                                     self.sand_system.clear()
                                     self.water_system.clear()
                                     self.lava_system.clear()
+                                    if hasattr(self, 'blue_lava_system'):
+                                        self.blue_lava_system.clear()
                                     self.toxic_system.clear()
                                     if hasattr(self, 'oil_system'):
                                         self.oil_system.clear()
@@ -567,6 +574,9 @@ class ParticleGame:
         elif self.buttons.get('lava') and self.buttons['lava'].collidepoint(pos):
             self.current_tool = 'lava'
             return True
+        elif self.buttons.get('bluelava') and self.buttons['bluelava'].collidepoint(pos):
+            self.current_tool = 'bluelava'
+            return True
         elif self.buttons.get('npc') and self.buttons['npc'].collidepoint(pos):
             self.current_tool = 'npc'
             return True
@@ -581,6 +591,8 @@ class ParticleGame:
                 self.blood_system.clear()
             if hasattr(self, 'lava_system'):
                 self.lava_system.clear()
+            if hasattr(self, 'blue_lava_system'):
+                self.blue_lava_system.clear()
             if hasattr(self, 'toxic_system'):
                 self.toxic_system.clear()
             if hasattr(self, 'oil_system'):
@@ -603,7 +615,14 @@ class ParticleGame:
         bw = max(100, self.sidebar_width - margin * 2)
         bh = 40
         y = 20
-        self.buttons = {'sand': pygame.Rect(margin, y, bw, bh), 'water': pygame.Rect(margin, y + 50, bw, bh), 'lava': pygame.Rect(margin, y + 100, bw, bh), 'npc': pygame.Rect(margin, y + 150, bw, bh), 'clear': pygame.Rect(margin, y + 200, bw, bh)}
+        self.buttons = {
+            'sand': pygame.Rect(margin, y, bw, bh),
+            'water': pygame.Rect(margin, y + 50, bw, bh),
+            'lava': pygame.Rect(margin, y + 100, bw, bh),
+            'bluelava': pygame.Rect(margin, y + 150, bw, bh),
+            'npc': pygame.Rect(margin, y + 200, bw, bh),
+            'clear': pygame.Rect(margin, y + 250, bw, bh)
+        }
 
     def _apply_resize(self, new_w: int, new_h: int):
         self.width = int(max(400, new_w))
@@ -622,6 +641,9 @@ class ParticleGame:
             self.milk_system.height = self.height
         self.lava_system.width = self.game_width
         self.lava_system.height = self.height
+        if hasattr(self, 'blue_lava_system'):
+            self.blue_lava_system.width = self.game_width
+            self.blue_lava_system.height = self.height
         if hasattr(self, 'toxic_system'):
             self.toxic_system.width = self.game_width
             self.toxic_system.height = self.height
@@ -682,6 +704,7 @@ class ParticleGame:
                   (self.milk_system.get_particle_count() if hasattr(self, 'milk_system') else 0) +
                   (self.oil_system.get_particle_count() if hasattr(self, 'oil_system') else 0) +
                   self.lava_system.get_particle_count() +
+                  (self.blue_lava_system.get_particle_count() if hasattr(self, 'blue_lava_system') else 0) +
                   self.toxic_system.get_particle_count() +
                   self.metal_system.get_particle_count() +
                   self.blood_system.get_particle_count() +
@@ -702,6 +725,10 @@ class ParticleGame:
         elif self.current_tool == 'lava':
             self.lava_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
             placed = True
+        elif self.current_tool == 'bluelava':
+            if hasattr(self, 'blue_lava_system'):
+                self.blue_lava_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
+                placed = True
         elif self.current_tool == 'metal':
             self.metal_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
             placed = True
@@ -876,6 +903,20 @@ class ParticleGame:
                 cell = (cell_x + dx, cell_y + dy)
                 if cell in self.lava_system.grid:
                     nearby.extend(self.lava_system.grid[cell])
+        return nearby
+
+    def _get_nearby_bluelava(self, x: float, y: float, radius: int=2) -> list:
+        if not hasattr(self, 'blue_lava_system'):
+            return []
+        cs = self.blue_lava_system.cell_size
+        cell_x, cell_y = (int(x // cs), int(y // cs))
+        nearby = []
+        grid = self.blue_lava_system.grid
+        for dx in range(-radius, radius + 1):
+            for dy in range(-radius, radius + 1):
+                cell = (cell_x + dx, cell_y + dy)
+                if cell in grid:
+                    nearby.extend(grid[cell])
         return nearby
 
     def _get_nearby_toxic(self, x: float, y: float, radius: int=2) -> list:
@@ -1119,7 +1160,10 @@ class ParticleGame:
                     p.prev[1] = gy
                 except Exception:
                     pass
-        total = self.sand_system.get_particle_count() + self.water_system.get_particle_count() + self.lava_system.get_particle_count() + self.toxic_system.get_particle_count() + self.blood_system.get_particle_count()
+        total = (self.sand_system.get_particle_count() + self.water_system.get_particle_count() +
+                 self.lava_system.get_particle_count() +
+                 (self.blue_lava_system.get_particle_count() if hasattr(self, 'blue_lava_system') else 0) +
+                 self.toxic_system.get_particle_count() + self.blood_system.get_particle_count())
         if self._frame_index - self._last_scale_apply >= 15:
             settings = recommend_settings(total, self._fps_avg or self.fps, self.target_fps, self.use_gpu)
             s = settings['sand']
@@ -1148,6 +1192,8 @@ class ParticleGame:
         if hasattr(self, 'oil_system'):
             self.oil_system.update(self._frame_index)
         self.lava_system.update(self._frame_index)
+        if hasattr(self, 'blue_lava_system'):
+            self.blue_lava_system.update(self._frame_index)
         self.toxic_system.update(self._frame_index)
         self.metal_system.update(self._frame_index)
         if hasattr(self, 'blood_system'):
@@ -1260,6 +1306,8 @@ class ParticleGame:
                 if hasattr(self, 'oil_system'):
                     self.oil_system.draw(game_surface)
                 self.lava_system.draw(game_surface)
+                if hasattr(self, 'blue_lava_system'):
+                    self.blue_lava_system.draw(game_surface)
                 self.toxic_system.draw(game_surface)
                 self.blood_system.draw(game_surface)
                 # AIR overlay removed
@@ -1298,7 +1346,12 @@ class ParticleGame:
                     parts.extend([f'Sand: {self.sand_system.get_particle_count()}', f'Water: {self.water_system.get_particle_count()}'])
                     if hasattr(self, 'oil_system'):
                         parts.append(f'Oil: {self.oil_system.get_particle_count()}')
-                    parts.extend([f'Lava: {self.lava_system.get_particle_count()}', f'Toxic: {self.toxic_system.get_particle_count()}', f'Blood: {self.blood_system.get_particle_count()}'])
+                    parts.extend([
+                        f'Lava: {self.lava_system.get_particle_count()}',
+                        f'BlueLava: {self.blue_lava_system.get_particle_count() if hasattr(self, 'blue_lava_system') else 0}',
+                        f'Toxic: {self.toxic_system.get_particle_count()}',
+                        f'Blood: {self.blood_system.get_particle_count()}'
+                    ])
                     stats = ' | '.join(parts) + f' | FPS: {self.fps}'
                     self._stats_cache_surf = self.font.render(stats, True, (200, 200, 200))
                 if self._stats_cache_surf:
@@ -1336,6 +1389,8 @@ class ParticleGame:
             if hasattr(self, 'oil_system'):
                 self.oil_system.draw(cpu_layer)
             self.lava_system.draw(cpu_layer)
+            if hasattr(self, 'blue_lava_system'):
+                self.blue_lava_system.draw(cpu_layer)
             self.toxic_system.draw(cpu_layer)
             self.blood_system.draw(cpu_layer)
             if self.npc is not None:
@@ -1402,6 +1457,12 @@ class ParticleGame:
                 self.renderer.draw_color = (w_color[0], w_color[1], w_color[2], 255)
                 self.renderer.draw_points(w_pts_offset)
             l_color, l_points = self.lava_system.get_point_groups()
+            if hasattr(self, 'blue_lava_system'):
+                bl_col, bl_pts = self.blue_lava_system.get_point_groups()
+                if bl_pts:
+                    bl_pts_offset = [(x + self.sidebar_width, y) for x, y in bl_pts]
+                    self.renderer.draw_color = (bl_col[0], bl_col[1], bl_col[2], 255)
+                    self.renderer.draw_points(bl_pts_offset)
             if l_points:
                 l_pts_offset = [(x + self.sidebar_width, y) for x, y in l_points]
                 self.renderer.draw_color = (l_color[0], l_color[1], l_color[2], 255)
@@ -1444,7 +1505,12 @@ class ParticleGame:
                 parts.append(f'Milk: {self.milk_system.get_particle_count()}')
             if hasattr(self, 'oil_system'):
                 parts.append(f'Oil: {self.oil_system.get_particle_count()}')
-            parts.extend([f'Lava: {self.lava_system.get_particle_count()}', f'Toxic: {self.toxic_system.get_particle_count()}', f'Blood: {self.blood_system.get_particle_count()}'])
+            parts.extend([
+                f'Lava: {self.lava_system.get_particle_count()}',
+                f'BlueLava: {self.blue_lava_system.get_particle_count() if hasattr(self, 'blue_lava_system') else 0}',
+                f'Toxic: {self.toxic_system.get_particle_count()}',
+                f'Blood: {self.blood_system.get_particle_count()}'
+            ])
             stats = ' | '.join(parts) + f' | FPS: {self.fps}'
             stats_surf = self.font.render(stats, True, (200, 200, 200))
             self._stats_cache_tex = Texture.from_surface(self.renderer, stats_surf)

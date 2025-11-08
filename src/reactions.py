@@ -21,6 +21,7 @@ def apply(game: Any) -> None:
     sand = getattr(game, 'sand_system', None)
     water = getattr(game, 'water_system', None)
     lava = getattr(game, 'lava_system', None)
+    blue_lava = getattr(game, 'blue_lava_system', None)
     oil = getattr(game, 'oil_system', None)
     toxic = getattr(game, 'toxic_system', None)
     metal = getattr(game, 'metal_system', None)
@@ -88,7 +89,157 @@ def apply(game: Any) -> None:
     milk_to_kill = set()
     blood_to_kill = set()
 
+    # Regular lava interactions
     for lp in list(lava.particles):
+        if get_water:
+            waters = get_water(lp.x, lp.y, radius=2)
+            waters = _limit(waters, MAX_N)
+            if waters:
+                for w in waters:
+                    try:
+                        metal.add_particle(w.x, w.y)
+                    except Exception:
+                        pass
+                    water_to_kill.add(id(w))
+                if len(waters) >= 3:
+                    lava_to_kill.add(id(lp))
+        if get_sand:
+            sands = get_sand(lp.x, lp.y, radius=2)
+            sands = _limit(sands, MAX_N)
+            if sands:
+                for s in sands:
+                    try:
+                        metal.add_particle(s.x, s.y)
+                    except Exception:
+                        pass
+                    sand_to_kill.add(id(s))
+        if dirt and get_dirt:
+            dirts = get_dirt(lp.x, lp.y, radius=2)
+            dirts = _limit(dirts, MAX_N)
+            if dirts:
+                for d in dirts:
+                    try:
+                        metal.add_particle(d.x, d.y)
+                    except Exception:
+                        pass
+                    dirt_to_kill.add(id(d))
+                if len(dirts) >= 3:
+                    lava_to_kill.add(id(lp))
+        if milk and get_milk:
+            milks = get_milk(lp.x, lp.y, radius=2)
+            milks = _limit(milks, MAX_N)
+            if milks:
+                for m in milks:
+                    milk_to_kill.add(id(m))
+                if len(milks) >= 2:
+                    lava_to_kill.add(id(lp))
+        if oil and get_oil:
+            oils = get_oil(lp.x, lp.y, radius=2)
+            oils = _limit(oils, MAX_N)
+            for op in oils:
+                try:
+                    op.ignite(200)
+                except Exception:
+                    pass
+        if toxic and get_toxic:
+            toxics = get_toxic(lp.x, lp.y, radius=2)
+            toxics = _limit(toxics, MAX_N)
+            if toxics:
+                for tp in toxics:
+                    try:
+                        metal.add_particle(tp.x, tp.y)
+                    except Exception:
+                        pass
+                    toxic_to_kill.add(id(tp))
+    # Blue lava ultra-hot interactions
+    if blue_lava:
+        for bp in list(blue_lava.particles):
+            # Water: explosive -> convert water to metal shards (obsidian-like) and kill nearby blue lava sometimes
+            if get_water:
+                waters = get_water(bp.x, bp.y, radius=2)
+                waters = _limit(waters, MAX_N)
+                if waters:
+                    for w in waters:
+                        try:
+                            metal.add_particle(w.x, w.y)
+                        except Exception:
+                            pass
+                        water_to_kill.add(id(w))
+                    # chance to remove some blue lava from explosive cooling
+                    if len(waters) >= 2 and random.random() < 0.4:
+                        lava_to_kill.add(id(bp))
+            # Sand: fuse into blue glass -> add metal particle tinted (placeholder) and remove sand
+            if get_sand:
+                sands = get_sand(bp.x, bp.y, radius=2)
+                sands = _limit(sands, MAX_N)
+                for s in sands:
+                    try:
+                        metal.add_particle(s.x, s.y)
+                        setattr(metal.particles[-1], 'blue_glass', True)
+                    except Exception:
+                        pass
+                    sand_to_kill.add(id(s))
+            # Dirt: slag/obsidian -> convert to metal
+            if dirt and get_dirt:
+                dirts = get_dirt(bp.x, bp.y, radius=2)
+                dirts = _limit(dirts, MAX_N)
+                for d in dirts:
+                    try:
+                        metal.add_particle(d.x, d.y)
+                    except Exception:
+                        pass
+                    dirt_to_kill.add(id(d))
+            # Metal: melt into alloy -> duplicate/mutate existing metal particles nearby
+            m_near = []
+            try:
+                m_near = [m for m in metal.particles if abs(m.x - bp.x) < 2 and abs(m.y - bp.y) < 2][:MAX_N]
+            except Exception:
+                m_near = []
+            for mp in m_near:
+                try:
+                    # accelerate rust_age or alloy_age
+                    setattr(mp, 'alloy_age', getattr(mp, 'alloy_age', 0) + 3)
+                except Exception:
+                    pass
+            # Toxic: vapor -> kill toxic and spawn more metal (radioactive residue placeholder)
+            if toxic and get_toxic:
+                toxics = get_toxic(bp.x, bp.y, radius=2)
+                toxics = _limit(toxics, MAX_N)
+                for tp in toxics:
+                    try:
+                        metal.add_particle(tp.x, tp.y)
+                        setattr(metal.particles[-1], 'radioactive', True)
+                    except Exception:
+                        pass
+                    toxic_to_kill.add(id(tp))
+            # Milk: burn instantly
+            if milk and get_milk:
+                milks = get_milk(bp.x, bp.y, radius=2)
+                milks = _limit(milks, MAX_N)
+                for m in milks:
+                    milk_to_kill.add(id(m))
+            # Blood: violent vaporization
+            if blood and get_blood:
+                bloods = get_blood(bp.x, bp.y, radius=2)
+                bloods = _limit(bloods, MAX_N)
+                for b in bloods:
+                    try:
+                        setattr(b, 'dead', True)
+                    except Exception:
+                        pass
+                    blood_to_kill.add(id(b))
+            # Fuse with regular lava: chance -> both die and spawn metal
+            if lava and random.random() < 0.02:
+                # check for nearby regular lava
+                near_lava = get_lava(bp.x, bp.y, radius=2) if get_lava else []
+                if near_lava:
+                    lava_to_kill.add(id(bp))
+                    for lv in near_lava[:3]:
+                        lava_to_kill.add(id(lv))
+                        try:
+                            metal.add_particle(lv.x, lv.y)
+                        except Exception:
+                            pass
         if get_water:
             waters = get_water(lp.x, lp.y, radius=2)
             waters = _limit(waters, MAX_N)
