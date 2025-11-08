@@ -171,8 +171,19 @@ class ParticleGame:
         self._ui_blocks_tex = None
     # Removed AIR overlay support: no air texture caching
         self._ui_admin_tex = None
-        self.ui_tiles = [{'key': 'blocks', 'label': 'BLOCKS', 'color': (180, 180, 190), 'surf': self.ui_blocks_surf}, {'key': 'sand', 'label': 'SAND', 'color': (200, 180, 120), 'surf': self.ui_sand_surf}, {'key': 'dirt', 'label': 'DIRT', 'color': (130, 100, 70), 'surf': self.ui_dirt_surf}, {'key': 'water', 'label': 'WATER', 'color': (80, 140, 255), 'surf': self.ui_water_surf}, {'key': 'oil', 'label': 'OIL', 'color': (60, 50, 30), 'surf': self.ui_oil_surf}, {'key': 'lava', 'label': 'LAVA', 'color': (255, 120, 60), 'surf': self.ui_lava_surf}, {'key': 'metal', 'label': 'METAL', 'color': (140, 140, 150), 'surf': self.ui_metal_surf}, {'key': 'toxic', 'label': 'TOXIC', 'color': (90, 220, 90), 'surf': self.ui_toxic_surf}, {'key': 'npc', 'label': 'NPC', 'color': (180, 180, 200), 'surf': self.ui_npc_surf}]
-        self.ui_tiles.append({'key': 'milk', 'label': 'MILK', 'color': (240, 240, 245), 'surf': self.ui_milk_surf})
+        self.ui_tiles = [
+            {'key': 'blocks', 'label': 'BLOCKS', 'color': (180, 180, 190), 'surf': self.ui_blocks_surf},
+            {'key': 'sand', 'label': 'SAND', 'color': (200, 180, 120), 'surf': self.ui_sand_surf},
+            {'key': 'dirt', 'label': 'DIRT', 'color': (130, 100, 70), 'surf': self.ui_dirt_surf},
+            {'key': 'water', 'label': 'WATER', 'color': (80, 140, 255), 'surf': self.ui_water_surf},
+            {'key': 'oil', 'label': 'OIL', 'color': (60, 50, 30), 'surf': self.ui_oil_surf},
+            {'key': 'lava', 'label': 'LAVA', 'color': (255, 120, 60), 'surf': self.ui_lava_surf},
+            {'key': 'metal', 'label': 'METAL', 'color': (140, 140, 150), 'surf': self.ui_metal_surf},
+            {'key': 'toxic', 'label': 'TOXIC', 'color': (90, 220, 90), 'surf': self.ui_toxic_surf},
+            {'key': 'milk', 'label': 'MILK', 'color': (240, 240, 245), 'surf': self.ui_milk_surf},
+            {'key': 'blood', 'label': 'BLOOD', 'color': (170, 20, 30), 'surf': self._load_image('src/assets/blood.png') or self.ui_oil_surf},
+            {'key': 'npc', 'label': 'NPC', 'color': (180, 180, 200), 'surf': self.ui_npc_surf}
+        ]
         # AIR tile removed entirely
         self.ui_tile_rects = {}
         self.ui_spawn_search_text = ''
@@ -566,6 +577,8 @@ class ParticleGame:
                 self.dirt_system.clear()
             if hasattr(self, 'milk_system'):
                 self.milk_system.clear()
+            if hasattr(self, 'blood_system'):
+                self.blood_system.clear()
             if hasattr(self, 'lava_system'):
                 self.lava_system.clear()
             if hasattr(self, 'toxic_system'):
@@ -699,6 +712,11 @@ class ParticleGame:
             if hasattr(self, 'milk_system'):
                 for _ in range(self.brush_size * 2):
                     self.milk_system.add_particle(int(game_x), int(game_y))
+                placed = True
+        elif self.current_tool == 'blood':
+            if hasattr(self, 'blood_system'):
+                # Use spray to feel like a splatter
+                self.blood_system.add_spray(int(game_x), int(game_y), count=max(4, self.brush_size), speed=1.8)
                 placed = True
         elif self.current_tool == 'dirt':
             if hasattr(self, 'dirt_system'):
@@ -834,6 +852,21 @@ class ParticleGame:
                 if cell in self.water_system.grid:
                     nearby.extend(self.water_system.grid[cell])
         return nearby
+
+    def _get_nearby_blood(self, x: float, y: float, radius: int=2) -> list:
+        if not hasattr(self, 'blood_system'):
+            return []
+        cs = getattr(self.blood_system, 'cell_size', 3)
+        cell_x, cell_y = (int(x // cs), int(y // cs))
+        out = []
+        for dx in range(-radius, radius + 1):
+            for dy in range(-radius, radius + 1):
+                cx = cell_x + dx
+                cy = cell_y + dy
+                for p in getattr(self.blood_system, 'particles', []):
+                    if int(p.x // cs) == cx and int(p.y // cs) == cy:
+                        out.append(p)
+        return out
 
     def _get_nearby_lava(self, x: float, y: float, radius: int=2) -> list:
         cell_x, cell_y = (int(x // self.lava_system.cell_size), int(y // self.lava_system.cell_size))
@@ -1117,6 +1150,8 @@ class ParticleGame:
         self.lava_system.update(self._frame_index)
         self.toxic_system.update(self._frame_index)
         self.metal_system.update(self._frame_index)
+        if hasattr(self, 'blood_system'):
+            self.blood_system.update(self._frame_index)
         if hasattr(self, 'dirt_system'):
             self.dirt_system.update(self._frame_index)
         self.blocks_system.update(self._frame_index)

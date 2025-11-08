@@ -26,6 +26,7 @@ def apply(game: Any) -> None:
     metal = getattr(game, 'metal_system', None)
     dirt = getattr(game, 'dirt_system', None)
     milk = getattr(game, 'milk_system', None)
+    blood = getattr(game, 'blood_system', None)
     if not (sand and water and lava and metal):
         return
 
@@ -61,6 +62,11 @@ def apply(game: Any) -> None:
             milk._rebuild_grid()
         except Exception:
             pass
+    if blood:
+        try:
+            blood._rebuild_grid()
+        except Exception:
+            pass
 
     get_sand = getattr(game, '_get_nearby_sand', None)
     get_water = getattr(game, '_get_nearby_water', None)
@@ -69,6 +75,7 @@ def apply(game: Any) -> None:
     get_oil = getattr(game, '_get_nearby_oil', None)
     get_dirt = getattr(game, '_get_nearby_dirt', None)
     get_milk = getattr(game, '_get_nearby_milk', None)
+    get_blood = getattr(game, '_get_nearby_blood', None)
 
     MAX_N = 12
 
@@ -79,6 +86,7 @@ def apply(game: Any) -> None:
     extinguish_oil = []
     dirt_to_kill = set()
     milk_to_kill = set()
+    blood_to_kill = set()
 
     for lp in list(lava.particles):
         if get_water:
@@ -231,6 +239,73 @@ def apply(game: Any) -> None:
                     m.toxic = True
                 except Exception:
                     pass
+    # Blood interactions
+    if blood and water and get_water and get_blood:
+        for wp in _limit(list(water.particles), 1200):
+            bloods = get_blood(wp.x, wp.y, radius=1)
+            for b in bloods:
+                try:
+                    b.diluted = True
+                except Exception:
+                    pass
+    if blood and sand and get_sand and get_blood:
+        for sp in _limit(list(sand.particles), 1200):
+            bloods = get_blood(sp.x, sp.y, radius=1)
+            for b in bloods:
+                try:
+                    b.soaked = True
+                except Exception:
+                    pass
+                try:
+                    setattr(sp, 'wet', True)
+                except Exception:
+                    pass
+    if blood and dirt and get_dirt and get_blood:
+        for dp in _limit(list(dirt.particles), 1200):
+            bloods = get_blood(dp.x, dp.y, radius=1)
+            for b in bloods:
+                try:
+                    b.soaked = True
+                except Exception:
+                    pass
+                try:
+                    dp.is_mud = True
+                except Exception:
+                    pass
+    if blood and toxic and get_toxic and get_blood:
+        for tp in _limit(list(toxic.particles), 1200):
+            bloods = get_blood(tp.x, tp.y, radius=1)
+            for b in bloods:
+                try:
+                    b.mutant = True
+                except Exception:
+                    pass
+    if blood and milk and get_milk and get_blood:
+        for mp in _limit(list(milk.particles), 800):
+            bloods = get_blood(mp.x, mp.y, radius=1)
+            for b in bloods:
+                try:
+                    b.curdled = True
+                    b.diluted = False  # pink chunky overrides dilution
+                except Exception:
+                    pass
+    if blood and lava and get_lava and get_blood:
+        for lp in _limit(list(lava.particles), 1200):
+            bloods = get_blood(lp.x, lp.y, radius=2)
+            for b in bloods:
+                try:
+                    b.dead = True
+                except Exception:
+                    pass
+    # Optional simple corrosion placeholder: blood near metal darkens metal (TODO real rust)
+    if blood and metal and get_blood:
+        for mp in _limit(list(metal.particles), 800):
+            bloods = get_blood(mp.x, mp.y, radius=1)
+            if bloods:
+                try:
+                    setattr(mp, 'rust_age', getattr(mp, 'rust_age', 0) + 1)
+                except Exception:
+                    pass
     # Contamination spreads slowly among dirt
     if dirt:
         contaminated = [p for p in dirt.particles if getattr(p, 'contaminated', False)]
@@ -278,3 +353,11 @@ def apply(game: Any) -> None:
             if id(p) in milk_to_kill:
                 setattr(p, 'dead', True)
         milk.sweep_dead()
+    if blood and blood_to_kill:
+        for p in blood.particles:
+            if id(p) in blood_to_kill:
+                setattr(p, 'dead', True)
+        try:
+            blood.sweep_dead()
+        except Exception:
+            pass

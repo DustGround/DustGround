@@ -146,3 +146,7 @@ class MilkSystem:
             else:
                 col = (240, 240, 245)
             surf.fill(col, (p.x, p.y, 1, 1))
+
+    def clear(self):
+        self.particles.clear()
+        self.grid.clear()

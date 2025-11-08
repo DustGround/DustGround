@@ -4,7 +4,10 @@ import pygame
 from typing import List, Tuple
 
 class BloodParticle:
-    __slots__ = ('x', 'y', 'vx', 'vy', 'age')
+    __slots__ = (
+        'x', 'y', 'vx', 'vy', 'age',
+        'diluted', 'mutant', 'curdled', 'clotted', 'dead', 'soaked'
+    )
 
     def __init__(self, x: float, y: float, vx: float=0.0, vy: float=0.0):
         self.x = float(x)
@@ -12,6 +15,12 @@ class BloodParticle:
         self.vx = float(vx)
         self.vy = float(vy)
         self.age = 0
+        self.diluted = False
+        self.mutant = False
+        self.curdled = False
+        self.clotted = False
+        self.dead = False
+        self.soaked = False
 
 class BloodSystem:
 
@@ -19,7 +28,7 @@ class BloodSystem:
         self.width = width
         self.height = height
         self.particles: List[BloodParticle] = []
-        self.gravity = 0.7
+        self.gravity = 0.7  # heavy fluid feel
         self.low_speed_damp = 0.9
         self.high_speed_damp = 0.975
         self.shear_ref = 2.0
@@ -28,6 +37,10 @@ class BloodSystem:
         self.ground_restitution = 0.05
         self.ground_friction = 0.8
         self.color = (170, 20, 30)
+        self.curdled_color = (215, 150, 170)
+        self.diluted_color = (200, 60, 70)
+        self.mutant_color = (60, 200, 90)
+        self.clotted_color = (90, 15, 20)
         self.cell_size = 3
         self.grid = {}
         self.neighbor_radius = 2
@@ -129,48 +142,79 @@ class BloodSystem:
         if not self.particles:
             return
         for p in self.particles:
+            if p.dead:
+                continue
+            # Gravity & aging
             p.vy += self.gravity
             p.age += 1
+            # Coagulation threshold
+            if not p.clotted and p.age >= self.clot_frames:
+                p.clotted = True
+            # Effective viscosity blend
             speed = (p.vx * p.vx + p.vy * p.vy) ** 0.5
             t = speed / (speed + self.shear_ref) if speed > 0.0 else 0.0
-            clot = min(1.0, p.age / float(self.clot_frames))
-            eff_low = max(0.8, self.low_speed_damp - clot * self.clot_low_extra)
-            eff_high = max(0.9, self.high_speed_damp - min(0.02, clot * 0.01))
+            clot_frac = min(1.0, p.age / float(self.clot_frames))
+            eff_low = max(0.75, self.low_speed_damp - clot_frac * self.clot_low_extra)
+            eff_high = max(0.85, self.high_speed_damp - min(0.03, clot_frac * 0.015))
             damping = eff_low * (1.0 - t) + eff_high * t
-            p.vx *= damping
-            p.vy *= damping
+            if p.clotted:
+                # Extra damping when clotted
+                p.vx *= 0.5
+                p.vy *= 0.5
+            else:
+                p.vx *= damping
+                p.vy *= damping
+            # State-based extra effects
+            if p.diluted:
+                p.vx *= 0.95; p.vy *= 0.95
+            if p.curdled:
+                p.vx *= 0.6; p.vy *= 0.6
+            if p.mutant:
+                p.vx *= 1.02; p.vy *= 1.02
             p.x += p.vx
             p.y += p.vy
+            # Collision with solid obstacles
             if self._is_solid and self._is_solid(int(p.x), int(p.y)):
                 p.x -= p.vx
                 p.y -= p.vy
-                p.vx *= -0.1
+                p.vx *= -0.08
                 p.vy = 0.0
+            # Boundaries
             if p.x < 0:
-                p.x = 0
-                p.vx *= -0.15
+                p.x = 0; p.vx *= -0.12
             elif p.x > self.width - 1:
-                p.x = self.width - 1
-                p.vx *= -0.15
+                p.x = self.width - 1; p.vx *= -0.12
             if p.y < 0:
-                p.y = 0
-                p.vy *= -0.1
+                p.y = 0; p.vy *= -0.08
             elif p.y > self.height - 1:
                 p.y = self.height - 1
                 p.vy = -abs(p.vy) * self.ground_restitution
                 p.vx *= self.ground_friction
                 if abs(p.vy) < 0.06:
                     p.vy = 0.0
-                    p.vx += random.uniform(-0.03, 0.03)
+                    p.vx += random.uniform(-0.02, 0.02)
+        # Rebuild & collide
         self._rebuild_grid()
         self._handle_collisions(frame_index)
-        self.particles = [p for p in self.particles if -10 <= p.x < self.width + 10 and -10 <= p.y < self.height + 10]
+        # Cull
+        self.particles = [p for p in self.particles if not p.dead and -10 <= p.x < self.width + 10 and -10 <= p.y < self.height + 10]
 
     def draw(self, surf: pygame.Surface):
-        col = self.color
         for p in self.particles:
             x, y = (int(p.x), int(p.y))
             if 0 <= x < self.width and 0 <= y < self.height:
+                if p.dead:
+                    continue
+                if p.mutant:
+                    col = self.mutant_color
+                elif p.curdled:
+                    col = self.curdled_color
+                elif p.diluted:
+                    col = self.diluted_color
+                elif p.clotted:
+                    col = self.clotted_color
+                else:
+                    col = self.color
                 surf.set_at((x, y), col)
 
     def get_point_groups(self) -> Tuple[Tuple[int, int, int], List[Tuple[int, int]]]:
