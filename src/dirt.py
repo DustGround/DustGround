@@ -1,4 +1,5 @@
 import math
+import random
 import pygame
 from typing import List, Tuple, Dict
 
@@ -20,12 +21,17 @@ class DirtSystem:
 		self.width = width
 		self.height = height
 		self.particles: List[DirtParticle] = []
-		self.gravity = 0.25
-		self.friction = 0.06
-		self.cell_size = 3
+		# Discrete granular update tuned for stable piles
+		self.gravity = 0.32  # kept for compatibility; not directly integrated as velocity
+		self.friction = 0.06 # kept for compatibility
+		self.cell_size = 1   # operate on pixel grid for dirt
 		self.grid: Dict[Tuple[int, int], List[DirtParticle]] = {}
-		self.neighbor_radius: int = 2
-		self.max_neighbors: int = 12
+		# Integer-pixel occupancy for granular settling
+		self.occ: Dict[Tuple[int, int], int] = {}
+		# Max pixels to fall per frame (faster settling in fullscreen)
+		self.fall_max: int = 3
+		# Number of relaxation passes per frame to allow stacked columns to cascade
+		self.relax_passes: int = 4
 		self.skip_mod: int = 1
 		self._is_solid = None
 
@@ -50,37 +56,29 @@ class DirtSystem:
 		return (int(x // self.cell_size), int(y // self.cell_size))
 
 	def _rebuild_grid(self):
+		# For compatibility if something else inspects grid, but main collision uses occ
 		self.grid.clear()
+		self.occ.clear()
 		for p in self.particles:
-			c = self._get_cell(p.x, p.y)
-			self.grid.setdefault(c, []).append(p)
+			xi, yi = int(p.x), int(p.y)
+			if 0 <= xi < self.width and 0 <= yi < self.height:
+				self.occ[(xi, yi)] = self.occ.get((xi, yi), 0) + 1
+
+	def _occupied(self, xi: int, yi: int) -> bool:
+		if xi < 0 or yi < 0 or xi >= self.width or yi >= self.height:
+			return True
+		if self._is_solid and self._is_solid(xi, yi):
+			return True
+		return self.occ.get((xi, yi), 0) > 0
 
 	def _get_neighbors(self, x: float, y: float, radius: int=1) -> List[DirtParticle]:
-		out: List[DirtParticle] = []
-		cx, cy = self._get_cell(x, y)
-		for dx in range(-radius, radius + 1):
-			for dy in range(-radius, radius + 1):
-				cell = (cx + dx, cy + dy)
-				if cell in self.grid:
-					out.extend(self.grid[cell])
-		return out
+		# Unused in the new discrete update, kept for API compatibility
+		return []
 
 	def update(self, frame_index: int=0):
+		# Age particles (kept for reactions) and rebuild occupancy from current positions
 		for p in self.particles:
 			p.age += 1
-			g = self.gravity * (0.5 if p.is_mud else 1.0)
-			fr = self.friction * (1.5 if p.is_mud else 1.0)
-			p.vy += g
-			p.vx *= 1 - fr
-			if abs(p.vx) < 0.01:
-				p.vx = 0.0
-			p.x += p.vx
-			p.y += p.vy
-			if self._is_solid and self._is_solid(int(p.x), int(p.y)):
-				p.x -= p.vx
-				p.y -= p.vy
-				p.vx *= -0.1
-				p.vy = 0.0
 		# boundaries
 		for p in self.particles:
 			if p.y + 1 >= self.height:
@@ -95,30 +93,38 @@ class DirtSystem:
 			if p.x >= self.width:
 				p.x = self.width - 1
 				p.vx *= -0.2
-		# mild neighbor separation
-		if self.skip_mod <= 1 or frame_index % self.skip_mod == 0:
+		# granular discrete update with multiple relaxation passes
+		for _pass in range(self.relax_passes):
 			self._rebuild_grid()
-			for p in self.particles:
-				neigh = self._get_neighbors(p.x, p.y, radius=self.neighbor_radius)
-				checked = 0
-				for o in neigh:
-					if o is p:
-						continue
-					dx = o.x - p.x
-					dy = o.y - p.y
-					dist = math.hypot(dx, dy)
-					if dist < 2.0:
-						if dist == 0:
-							dist = 0.1
-						nx = dx / dist
-						ny = dy / dist
-						overlap = 2.0 - dist
-						p.x -= nx * overlap * 0.5
-						p.y -= ny * overlap * 0.5
-						o.x += nx * overlap * 0.5
-						o.y += ny * overlap * 0.5
-						checked += 1
-						if checked >= self.max_neighbors:
+			order = list(range(len(self.particles)))
+			random.shuffle(order)
+			for idx in order:
+				p = self.particles[idx]
+				xi, yi = int(p.x), int(p.y)
+				if xi < 0 or xi >= self.width or yi < 0 or yi >= self.height:
+					continue
+				# fall straight down up to fall_max
+				max_fall = 2 if p.is_mud else self.fall_max
+				falls = 0
+				while falls < max_fall and not self._occupied(xi, yi + 1):
+					self.occ[(xi, yi)] = max(0, self.occ.get((xi, yi), 1) - 1)
+					yi += 1
+					p.y = float(yi)
+					self.occ[(xi, yi)] = self.occ.get((xi, yi), 0) + 1
+					falls += 1
+				# if cannot fall this pass, try diagonals
+				if falls == 0:
+					dirs = [-1, 1]
+					if random.random() < 0.5:
+						dirs.reverse()
+					for dx in dirs:
+						nx, ny = xi + dx, yi + 1
+						if not self._occupied(nx, ny):
+							self.occ[(xi, yi)] = max(0, self.occ.get((xi, yi), 1) - 1)
+							xi, yi = nx, ny
+							p.x = float(xi)
+							p.y = float(yi)
+							self.occ[(xi, yi)] = self.occ.get((xi, yi), 0) + 1
 							break
 		# keep particles in reasonable range
 		self.particles = [p for p in self.particles if -10 <= p.x < self.width + 10 and -10 <= p.y < self.height + 10]
@@ -168,3 +174,4 @@ class DirtSystem:
 	def clear(self):
 		self.particles.clear()
 		self.grid.clear()
+		self.occ.clear()

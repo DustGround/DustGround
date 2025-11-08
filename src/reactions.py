@@ -25,6 +25,7 @@ def apply(game: Any) -> None:
     toxic = getattr(game, 'toxic_system', None)
     metal = getattr(game, 'metal_system', None)
     dirt = getattr(game, 'dirt_system', None)
+    milk = getattr(game, 'milk_system', None)
     if not (sand and water and lava and metal):
         return
 
@@ -55,6 +56,11 @@ def apply(game: Any) -> None:
             dirt._rebuild_grid()
         except Exception:
             pass
+    if milk:
+        try:
+            milk._rebuild_grid()
+        except Exception:
+            pass
 
     get_sand = getattr(game, '_get_nearby_sand', None)
     get_water = getattr(game, '_get_nearby_water', None)
@@ -62,6 +68,7 @@ def apply(game: Any) -> None:
     get_toxic = getattr(game, '_get_nearby_toxic', None)
     get_oil = getattr(game, '_get_nearby_oil', None)
     get_dirt = getattr(game, '_get_nearby_dirt', None)
+    get_milk = getattr(game, '_get_nearby_milk', None)
 
     MAX_N = 12
 
@@ -71,6 +78,7 @@ def apply(game: Any) -> None:
     toxic_to_kill = set()
     extinguish_oil = []
     dirt_to_kill = set()
+    milk_to_kill = set()
 
     for lp in list(lava.particles):
         if get_water:
@@ -106,6 +114,14 @@ def apply(game: Any) -> None:
                         pass
                     dirt_to_kill.add(id(d))
                 if len(dirts) >= 3:
+                    lava_to_kill.add(id(lp))
+        if milk and get_milk:
+            milks = get_milk(lp.x, lp.y, radius=2)
+            milks = _limit(milks, MAX_N)
+            if milks:
+                for m in milks:
+                    milk_to_kill.add(id(m))
+                if len(milks) >= 2:
                     lava_to_kill.add(id(lp))
         if oil and get_oil:
             oils = get_oil(lp.x, lp.y, radius=2)
@@ -178,6 +194,43 @@ def apply(game: Any) -> None:
                     d.contaminated = True
                 except Exception:
                     pass
+    # Milk interactions
+    if milk and dirt and get_dirt:
+        for mp in _limit(list(milk.particles), 1500):
+            dirts = get_dirt(mp.x, mp.y, radius=1)
+            for d in dirts:
+                try:
+                    setattr(d, 'fertile', True)
+                except Exception:
+                    pass
+                if random.random() < 0.08:
+                    milk_to_kill.add(id(mp))
+    if milk and sand and get_sand:
+        for mp in _limit(list(milk.particles), 1500):
+            sands = get_sand(mp.x, mp.y, radius=1)
+            for s in sands:
+                try:
+                    setattr(mp, 'sludge', True)
+                except Exception:
+                    pass
+                if random.random() < 0.04:
+                    milk_to_kill.add(id(mp))
+    if milk and water and get_water:
+        for mp in _limit(list(milk.particles), 1500):
+            waters = get_water(mp.x, mp.y, radius=1)
+            if waters:
+                try:
+                    setattr(mp, 'diluted', True)
+                except Exception:
+                    pass
+    if milk and toxic and get_toxic:
+        for tp in _limit(list(toxic.particles), 1500):
+            milks = get_milk(tp.x, tp.y, radius=1) if get_milk else []
+            for m in milks:
+                try:
+                    m.toxic = True
+                except Exception:
+                    pass
     # Contamination spreads slowly among dirt
     if dirt:
         contaminated = [p for p in dirt.particles if getattr(p, 'contaminated', False)]
@@ -220,3 +273,8 @@ def apply(game: Any) -> None:
             if id(p) in toxic_to_kill:
                 setattr(p, 'dead', True)
         toxic.sweep_dead()
+    if milk and milk_to_kill:
+        for p in milk.particles:
+            if id(p) in milk_to_kill:
+                setattr(p, 'dead', True)
+        milk.sweep_dead()
