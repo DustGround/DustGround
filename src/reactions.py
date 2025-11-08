@@ -22,6 +22,7 @@ def apply(game: Any) -> None:
     water = getattr(game, 'water_system', None)
     lava = getattr(game, 'lava_system', None)
     blue_lava = getattr(game, 'blue_lava_system', None)
+    ruby = getattr(game, 'ruby_system', None)
     oil = getattr(game, 'oil_system', None)
     toxic = getattr(game, 'toxic_system', None)
     metal = getattr(game, 'metal_system', None)
@@ -58,6 +59,11 @@ def apply(game: Any) -> None:
             dirt._rebuild_grid()
         except Exception:
             pass
+    if ruby:
+        try:
+            ruby._rebuild_grid()
+        except Exception:
+            pass
     if milk:
         try:
             milk._rebuild_grid()
@@ -77,6 +83,8 @@ def apply(game: Any) -> None:
     get_dirt = getattr(game, '_get_nearby_dirt', None)
     get_milk = getattr(game, '_get_nearby_milk', None)
     get_blood = getattr(game, '_get_nearby_blood', None)
+    get_ruby = getattr(game, '_get_nearby_ruby', None)
+    get_bluelava = getattr(game, '_get_nearby_bluelava', None)
 
     MAX_N = 12
 
@@ -301,6 +309,56 @@ def apply(game: Any) -> None:
                         pass
                     toxic_to_kill.add(id(tp))
 
+    # Ruby interactions
+    if ruby:
+        for rp in list(ruby.particles):
+            # Toxic: slow corrosion, occasionally neutralize a toxic particle
+            if toxic and get_toxic:
+                toxics = _limit(get_toxic(rp.x, rp.y, radius=1), MAX_N)
+                for tp in toxics:
+                    try:
+                        setattr(rp, 'corroded', getattr(rp, 'corroded', 0) + 1)
+                    except Exception:
+                        pass
+                    if random.random() < 0.04:
+                        toxic_to_kill.add(id(tp))
+            # Lava: heat up and charge over time
+            if lava and get_lava:
+                lavas = _limit(get_lava(rp.x, rp.y, radius=1), MAX_N)
+                if lavas:
+                    try:
+                        rp.heat = getattr(rp, 'heat', 0) + len(lavas)
+                        if random.random() < 0.02:
+                            rp.charged = True
+                    except Exception:
+                        pass
+            # Blue lava: overcharge and become unstable (may explode via ruby.update)
+            if blue_lava and get_bluelava:
+                bls = _limit(get_bluelava(rp.x, rp.y, radius=1), MAX_N)
+                if bls:
+                    try:
+                        rp.charged = True
+                        rp.overcharged = True
+                        rp.unstable = max(getattr(rp, 'unstable', 0), random.randint(20, 90))
+                    except Exception:
+                        pass
+            # Blood: curse
+            if blood and get_blood:
+                bloods = _limit(get_blood(rp.x, rp.y, radius=1), MAX_N)
+                if bloods:
+                    try:
+                        rp.cursed = True
+                    except Exception:
+                        pass
+            # Milk: dull/opaque
+            if milk and get_milk:
+                milks = _limit(get_milk(rp.x, rp.y, radius=1), MAX_N)
+                if milks:
+                    try:
+                        rp.dulled = True
+                    except Exception:
+                        pass
+
     if oil and get_water:
         for op in list(oil.particles):
             if getattr(op, 'burning', False):
@@ -471,6 +529,22 @@ def apply(game: Any) -> None:
                     neighbors = _limit(get_dirt(nx, ny, radius=1), 3)
                     for n in neighbors:
                         setattr(n, 'contaminated', True)
+            except Exception:
+                pass
+
+        # Remove mehedi behavior: ensure any prior 'mehedi' sand reverts to 'meh' image/state.
+        if sand:
+            try:
+                meh_img = getattr(game, '_meh_img', None)
+                for sp in sand.particles:
+                    if getattr(sp, 'mehedi', False):
+                        try:
+                            sp.mehedi = False
+                            sp.meh = True
+                            if meh_img is not None:
+                                sp.image = meh_img
+                        except Exception:
+                            pass
             except Exception:
                 pass
 
