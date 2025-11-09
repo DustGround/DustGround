@@ -23,6 +23,7 @@ def apply(game: Any) -> None:
     lava = getattr(game, 'lava_system', None)
     blue_lava = getattr(game, 'blue_lava_system', None)
     ruby = getattr(game, 'ruby_system', None)
+    diamond = getattr(game, 'diamond_system', None)
     oil = getattr(game, 'oil_system', None)
     toxic = getattr(game, 'toxic_system', None)
     metal = getattr(game, 'metal_system', None)
@@ -64,6 +65,11 @@ def apply(game: Any) -> None:
             ruby._rebuild_grid()
         except Exception:
             pass
+    if diamond:
+        try:
+            diamond._rebuild_grid()
+        except Exception:
+            pass
     if milk:
         try:
             milk._rebuild_grid()
@@ -85,6 +91,7 @@ def apply(game: Any) -> None:
     get_blood = getattr(game, '_get_nearby_blood', None)
     get_ruby = getattr(game, '_get_nearby_ruby', None)
     get_bluelava = getattr(game, '_get_nearby_bluelava', None)
+    get_diamond = getattr(game, '_get_nearby_diamond', None)
 
     MAX_N = 12
 
@@ -318,6 +325,55 @@ def apply(game: Any) -> None:
                 for tp in toxics:
                     try:
                         setattr(rp, 'corroded', getattr(rp, 'corroded', 0) + 1)
+                    except Exception:
+                        pass
+
+    # Diamond interactions
+    if diamond:
+        for dp in list(diamond.particles):
+            # Toxic Waste: inert (no change)
+            if toxic and get_toxic:
+                _ = get_toxic(dp.x, dp.y, radius=1)  # ignored intentionally
+            # Lava: absorb heat slowly; potential sublimation to carbon gas
+            if lava and get_lava:
+                lavas = get_lava(dp.x, dp.y, radius=1)
+                if lavas:
+                    try:
+                        dp.heat = getattr(dp, 'heat', 0.0) + 0.4 * len(lavas)
+                        # Sublimation threshold (very high heat)
+                        if dp.heat > 220 and random.random() < 0.05:
+                            # Replace with carbon gas placeholder -> toxic particle tinted dark
+                            try:
+                                toxic.add_particle(dp.x, dp.y)
+                                setattr(toxic.particles[-1], 'carbon_gas', True)
+                            except Exception:
+                                pass
+                            dp.dead = True
+                    except Exception:
+                        pass
+            # Blue Lava: convert to synthetic diamond (bluish & conductive)
+            if blue_lava and get_bluelava:
+                bls = get_bluelava(dp.x, dp.y, radius=1)
+                if bls:
+                    try:
+                        dp.synthetic = True
+                        dp.heat = min(300.0, getattr(dp, 'heat', 0.0) + 1.0 * len(bls))
+                    except Exception:
+                        pass
+            # Blood: stain only
+            if blood and get_blood:
+                bloods = get_blood(dp.x, dp.y, radius=1)
+                if bloods:
+                    try:
+                        dp.stained = True
+                    except Exception:
+                        pass
+            # Milk: frosting effect
+            if milk and get_milk:
+                milks = get_milk(dp.x, dp.y, radius=1)
+                if milks:
+                    try:
+                        dp.frosted = True
                     except Exception:
                         pass
                     if random.random() < 0.04:

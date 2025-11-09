@@ -26,6 +26,7 @@ class StackManager:
 			'blocks': 9.0,
 			'metal': 8.0,
 			'ruby': 7.5,
+			'diamond': 7.4,
 			'lava': 7.0,
 			'bluelava': 7.2,
 			'toxic': 3.0,
