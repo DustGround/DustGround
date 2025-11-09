@@ -1,4 +1,6 @@
 import math
+from typing import Callable, Optional
+
 import pygame
 
 class Particle:
@@ -75,7 +77,7 @@ class NPC:
         for p in self.particles:
             p.apply_force(f)
 
-    def update(self, dt, bounds: tuple[int, int] | None=None):
+    def update(self, dt, bounds: tuple[int, int] | None=None, solid_query: Callable[[int, int], bool] | None=None):
         self._frame_counter += 1
         if self.user_dragging:
             self._sleep_torso = False
@@ -110,22 +112,10 @@ class NPC:
                     p.pos.y = 0
                 if p.pos.y > h - 1:
                     p.pos.y = h - 1
-        ground_y = bounds[1] - 1 if bounds else None
-        feet_grounded = 0
-        if ground_y is not None:
-            for idx in (7, 8):
-                foot = self.particles[idx]
-                if foot.pos.y > ground_y:
-                    foot.pos.y = ground_y
-                    foot.prev.y = foot.pos.y
-                    # Apply strong horizontal friction without locking completely
-                    vx = foot.pos.x - foot.prev.x
-                    foot.prev.x = foot.pos.x - vx * 0.2
-                else:
-                    # In air: no special horizontal locking
-                    pass
-                if abs(foot.pos.y - ground_y) < 0.5:
-                    feet_grounded += 1
+        if solid_query is not None:
+            for part in self.particles:
+                self._nudge_particle_from_solid(part, solid_query, bounds)
+        feet_grounded, ground_y = self._resolve_block_contacts(solid_query, bounds)
         self._feet_grounded = feet_grounded
         # Determine rigid posture activation (guaranteed still torso/head when fully grounded)
         rigid_active = (ground_y is not None and feet_grounded == 2 and not self.user_dragging)
@@ -192,6 +182,9 @@ class NPC:
                     p.pos.y = 0
                 if p.pos.y > h - 1:
                     p.pos.y = h - 1
+        if solid_query is not None:
+            for part in self.particles:
+                self._nudge_particle_from_solid(part, solid_query, bounds)
         # Torso lateral averaging to damp jitter
         torso = (0, 1, 2, 3, 4)
         if rigid_active:
@@ -334,6 +327,118 @@ class NPC:
         eye = pygame.Rect(0, 0, max(2, hs // 10), max(2, hs // 10))
         eye.center = (head_rect.centerx + hs // 5, head_rect.centery - hs // 8)
         pygame.draw.rect(surf, (90, 90, 100), eye)
+
+    def _nudge_particle_from_solid(self, particle: Particle, solid_query: Callable[[int, int], bool],
+                                   bounds: tuple[int, int] | None) -> None:
+        """Minimal translation to push a particle out of any solid tile it overlaps."""
+        max_iter = 4
+        moved_x = False
+        moved_y = False
+        orig_prev_x = particle.prev.x
+        orig_prev_y = particle.prev.y
+        for _ in range(max_iter):
+            ix = int(particle.pos.x)
+            iy = int(particle.pos.y)
+            if bounds is not None:
+                w, h = bounds
+                if ix < 0 or ix >= w or iy < 0 or iy >= h:
+                    break
+            try:
+                inside = solid_query(ix, iy)
+            except Exception:
+                inside = False
+            if not inside:
+                break
+            fx = particle.pos.x - ix
+            fy = particle.pos.y - iy
+            dist_left = fx
+            dist_right = 1.0 - fx
+            dist_top = fy
+            dist_bottom = 1.0 - fy
+            min_dist = min(dist_left, dist_right, dist_top, dist_bottom)
+            if min_dist == dist_top:
+                particle.pos.y = iy - 0.01
+                moved_y = True
+            elif min_dist == dist_bottom:
+                particle.pos.y = iy + 1.01
+                moved_y = True
+            elif min_dist == dist_left:
+                particle.pos.x = ix - 0.01
+                moved_x = True
+            else:
+                particle.pos.x = ix + 1.01
+                moved_x = True
+        if bounds is not None:
+            w, h = bounds
+            if particle.pos.x < 0.0:
+                particle.pos.x = 0.0
+                moved_x = True
+            elif particle.pos.x > w - 1:
+                particle.pos.x = float(w - 1)
+                moved_x = True
+            if particle.pos.y < 0.0:
+                particle.pos.y = 0.0
+                moved_y = True
+            elif particle.pos.y > h - 1:
+                particle.pos.y = float(h - 1)
+                moved_y = True
+        if moved_x:
+            vx = particle.pos.x - orig_prev_x
+            particle.prev.x = particle.pos.x - vx * 0.1
+        if moved_y:
+            vy = particle.pos.y - orig_prev_y
+            if vy < 0:
+                particle.prev.y = particle.pos.y
+            else:
+                particle.prev.y = particle.pos.y - vy * 0.1
+
+    def _resolve_block_contacts(self, solid_query: Callable[[int, int], bool] | None,
+                                bounds: tuple[int, int] | None) -> tuple[int, Optional[float]]:
+        """Snap feet onto solid surfaces or world ground and report contact metrics."""
+        world_ground = float(bounds[1] - 1) if bounds else None
+        grounded_samples: list[float] = []
+        feet_grounded = 0
+        for idx in (7, 8):
+            foot = self.particles[idx]
+            grounded = False
+            if solid_query is not None:
+                fx = int(foot.pos.x)
+                base_y = int(foot.pos.y)
+                for step in range(4):
+                    tile_y = base_y + step
+                    if bounds is not None:
+                        _, h = bounds
+                        if tile_y < 0 or tile_y >= h:
+                            break
+                    try:
+                        if solid_query(fx, tile_y):
+                            top = float(tile_y)
+                            target = top - 0.01
+                            if foot.pos.y > target:
+                                foot.pos.y = target
+                            vx = foot.pos.x - foot.prev.x
+                            foot.prev.y = foot.pos.y
+                            foot.prev.x = foot.pos.x - vx * 0.2
+                            grounded = True
+                            grounded_samples.append(foot.pos.y)
+                            break
+                    except Exception:
+                        break
+            if (not grounded) and world_ground is not None and foot.pos.y >= world_ground:
+                foot.pos.y = world_ground
+                vx = foot.pos.x - foot.prev.x
+                foot.prev.y = foot.pos.y
+                foot.prev.x = foot.pos.x - vx * 0.2
+                grounded = True
+                grounded_samples.append(foot.pos.y)
+            if grounded:
+                feet_grounded += 1
+        ground_y: Optional[float] = None
+        if grounded_samples:
+            ground_y = sum(grounded_samples) / len(grounded_samples)
+        elif world_ground is not None:
+            ground_y = world_ground
+        return feet_grounded, ground_y
 
     def _apply_motors(self, targets: dict[int, pygame.math.Vector2], strength: float, damping: float, dt: float):
         if self.freeze_torso:

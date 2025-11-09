@@ -31,6 +31,7 @@ from src.settings import load_settings, save_settings
 from src.pluginman.pluginmain import start_plugin_service, get_service
 from src.pluginman import pluginload
 from src import discord as dg_discord
+from src.col import CollisionManager, default_register_all
 from src import sound as sfx
 GPU_AVAILABLE = False
 try:
@@ -97,6 +98,11 @@ class ParticleGame:
         if hasattr(self, 'diamond_system'):
             self.diamond_system.set_obstacle_query(self._is_solid_obstacle)
         self.blocks_system.set_external_obstacle(self.metal_system.is_solid)
+        # Universal collision manager: cross-material collisions + block correction
+        try:
+            self.collision = default_register_all(self)
+        except Exception:
+            self.collision = None
         self.camera = Camera(world_w=self.game_width, world_h=self.height, view_w=self.game_width, view_h=self.height)
         self.grid_bg = GridBackground()
         self.show_main_menu = True
@@ -1269,12 +1275,18 @@ class ParticleGame:
             self.blood_system.update(self._frame_index)
         if hasattr(self, 'dirt_system'):
             self.dirt_system.update(self._frame_index)
-        self.blocks_system.update(self._frame_index)
+        self.blocks_system.update(self._frame_index, npcs=self.npcs)
+        # Apply cross-system collisions before reactions
+        if getattr(self, 'collision', None) is not None:
+            try:
+                self.collision.apply(self._frame_index)
+            except Exception:
+                pass
         dt = 1.0 / max(self.target_fps, 1)
         if self.npcs:
             for npc in list(self.npcs):
                 try:
-                    npc.update(dt, bounds=(self.game_width, self.height))
+                    npc.update(dt, bounds=(self.game_width, self.height), solid_query=self._is_solid_obstacle)
                 except Exception:
                     try:
                         self.npcs.remove(npc)
