@@ -11,21 +11,21 @@ class RubyParticle:
         self.vx = 0.0
         self.vy = 0.0
         self.age = 0
-        # states
+                
         self.charged = False
         self.overcharged = False
-        self.unstable = 0      # ticks until possible explosion
+        self.unstable = 0                                      
         self.cursed = False
         self.dulled = False
-        self.corroded = 0      # corrosion level
-        self.heat = 0          # absorbed heat
+        self.corroded = 0                       
+        self.heat = 0                         
 
 class RubySystem:
     def __init__(self, width: int, height: int):
         self.width = width
         self.height = height
         self.particles: List[RubyParticle] = []
-        self.gravity = 0.35  # medium-heavy
+        self.gravity = 0.35                
         self.friction = 0.015
         self.cell_size = 3
         self.grid: Dict[Tuple[int,int], List[RubyParticle]] = {}
@@ -33,13 +33,13 @@ class RubySystem:
         self.max_neighbors = 12
         self.skip_mod = 1
         self._is_solid = None
-        # base colors
+                     
         self.base_color = (180, 20, 30)
         self.charged_color = (220, 30, 50)
         self.overcharged_color = (255, 80, 120)
         self.cursed_color = (120, 10, 20)
         self.dulled_color = (120, 90, 100)
-        # glow sprite for subtle bloom
+                                      
         self._glow = self._make_glow_surface(7, (255, 60, 80))
 
     def _make_glow_surface(self, radius: int, col: Tuple[int,int,int]) -> pygame.Surface:
@@ -127,7 +127,7 @@ class RubySystem:
                 p.y -= p.vy
                 p.vx *= -0.1
                 p.vy = 0.0
-            # sinking behavior tweaks: slightly higher damping in water-like mediums could be added in reactions
+                                                                                                                
             if p.y >= self.height - 1:
                 p.y = self.height - 1
                 p.vy = 0.0
@@ -135,12 +135,12 @@ class RubySystem:
         if self.skip_mod == 1 or frame_index % self.skip_mod == 0:
             self._collide()
 
-        # handle unstable overcharge countdown & rare explosion (visual: just delete for now)
+                                                                                             
         for p in list(self.particles):
             if p.unstable > 0:
                 p.unstable -= 1
                 if p.unstable == 0 and random.random() < 0.25:
-                    # explode: remove this ruby; future: spawn plasma sparks particles
+                                                                                      
                     try:
                         p_index = self.particles.index(p)
                     except ValueError:
@@ -155,7 +155,7 @@ class RubySystem:
         for p in self.particles:
             x, y = int(p.x), int(p.y)
             if 0 <= x < w and 0 <= y < h:
-                # choose color per state
+                                        
                 col = self.base_color
                 if p.dulled:
                     col = self.dulled_color
@@ -166,7 +166,7 @@ class RubySystem:
                 if p.overcharged:
                     col = self.overcharged_color
                 surf.set_at((x, y), col)
-                # subtle glow when heated/charged
+                                                 
                 if (p.charged or p.overcharged or p.heat > 0) and glow is not None:
                     surf.blit(glow, (x - gr, y - gr), special_flags=pygame.BLEND_ADD)
 

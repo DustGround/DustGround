@@ -225,7 +225,7 @@ class BlocksSystem:
                     if not rect.colliderect(body_rect):
                         continue
                     resolved = False
-                    # Vertical resolution (block resting on top or supporting from below)
+                                                                                         
                     if prev_rect.bottom <= body_rect.top and b.vy >= 0:
                         b.y = float(body_rect.top - b.h)
                         b.vy = 0.0
@@ -237,7 +237,7 @@ class BlocksSystem:
                         b.vy = 0.0
                         resolved = True
                     else:
-                        # General overlap: push along shallow axis
+                                                                  
                         overlap_left = rect.right - body_rect.left
                         overlap_right = body_rect.right - rect.left
                         overlap_top = rect.bottom - body_rect.top
@@ -266,10 +266,10 @@ class BlocksSystem:
                     if resolved:
                         rect = b.rect
                         prev_rect = pygame.Rect(int(b.px), int(b.py), int(b.w), int(b.h))
-                        # Minimal shared friction when supported by body parts
+                                                                              
                         if abs(b.vx) < 0.02:
                             b.vx = 0.0
-                        # Only handle one body part per block per frame to avoid oscillations
+                                                                                             
                         break
                 else:
                     continue

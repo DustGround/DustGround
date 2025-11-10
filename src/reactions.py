@@ -1,7 +1,26 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable, List, Tuple
 import random
+
+                                                         
+_registered_reactions: List[Tuple[int, Callable[[Any], None]]] = []
+
+def register_reaction(fn: Callable[[Any], None], priority: int = 100):
+    """Register a custom reaction callback.
+
+    The function will be called once per frame as part of the reactions pass:
+    fn(game) -> None
+
+    Lower numeric priority runs earlier. Returns the function for decorator use.
+    """
+    try:
+        pr = int(priority)
+    except Exception:
+        pr = 100
+    _registered_reactions.append((pr, fn))
+    _registered_reactions.sort(key=lambda t: t[0])
+    return fn
 
 
 def _mark_dead(items):
@@ -104,7 +123,7 @@ def apply(game: Any) -> None:
     milk_to_kill = set()
     blood_to_kill = set()
 
-    # Regular lava interactions
+                               
     for lp in list(lava.particles):
         if get_water:
             waters = get_water(lp.x, lp.y, radius=2)
@@ -166,10 +185,10 @@ def apply(game: Any) -> None:
                     except Exception:
                         pass
                     toxic_to_kill.add(id(tp))
-    # Blue lava ultra-hot interactions
+                                      
     if blue_lava:
         for bp in list(blue_lava.particles):
-            # Water: explosive -> convert water to metal shards (obsidian-like) and kill nearby blue lava sometimes
+                                                                                                                   
             if get_water:
                 waters = get_water(bp.x, bp.y, radius=2)
                 waters = _limit(waters, MAX_N)
@@ -180,10 +199,10 @@ def apply(game: Any) -> None:
                         except Exception:
                             pass
                         water_to_kill.add(id(w))
-                    # chance to remove some blue lava from explosive cooling
+                                                                            
                     if len(waters) >= 2 and random.random() < 0.4:
                         lava_to_kill.add(id(bp))
-            # Sand: fuse into blue glass -> add metal particle tinted (placeholder) and remove sand
+                                                                                                   
             if get_sand:
                 sands = get_sand(bp.x, bp.y, radius=2)
                 sands = _limit(sands, MAX_N)
@@ -194,7 +213,7 @@ def apply(game: Any) -> None:
                     except Exception:
                         pass
                     sand_to_kill.add(id(s))
-            # Dirt: slag/obsidian -> convert to metal
+                                                     
             if dirt and get_dirt:
                 dirts = get_dirt(bp.x, bp.y, radius=2)
                 dirts = _limit(dirts, MAX_N)
@@ -204,7 +223,7 @@ def apply(game: Any) -> None:
                     except Exception:
                         pass
                     dirt_to_kill.add(id(d))
-            # Metal: melt into alloy -> duplicate/mutate existing metal particles nearby
+                                                                                        
             m_near = []
             try:
                 m_near = [m for m in metal.particles if abs(m.x - bp.x) < 2 and abs(m.y - bp.y) < 2][:MAX_N]
@@ -212,11 +231,11 @@ def apply(game: Any) -> None:
                 m_near = []
             for mp in m_near:
                 try:
-                    # accelerate rust_age or alloy_age
+                                                      
                     setattr(mp, 'alloy_age', getattr(mp, 'alloy_age', 0) + 3)
                 except Exception:
                     pass
-            # Toxic: vapor -> kill toxic and spawn more metal (radioactive residue placeholder)
+                                                                                               
             if toxic and get_toxic:
                 toxics = get_toxic(bp.x, bp.y, radius=2)
                 toxics = _limit(toxics, MAX_N)
@@ -227,13 +246,13 @@ def apply(game: Any) -> None:
                     except Exception:
                         pass
                     toxic_to_kill.add(id(tp))
-            # Milk: burn instantly
+                                  
             if milk and get_milk:
                 milks = get_milk(bp.x, bp.y, radius=2)
                 milks = _limit(milks, MAX_N)
                 for m in milks:
                     milk_to_kill.add(id(m))
-            # Blood: violent vaporization
+                                         
             if blood and get_blood:
                 bloods = get_blood(bp.x, bp.y, radius=2)
                 bloods = _limit(bloods, MAX_N)
@@ -243,9 +262,9 @@ def apply(game: Any) -> None:
                     except Exception:
                         pass
                     blood_to_kill.add(id(b))
-            # Fuse with regular lava: chance -> both die and spawn metal
+                                                                        
             if lava and random.random() < 0.02:
-                # check for nearby regular lava
+                                               
                 near_lava = get_lava(bp.x, bp.y, radius=2) if get_lava else []
                 if near_lava:
                     lava_to_kill.add(id(bp))
@@ -316,10 +335,10 @@ def apply(game: Any) -> None:
                         pass
                     toxic_to_kill.add(id(tp))
 
-    # Ruby interactions
+                       
     if ruby:
         for rp in list(ruby.particles):
-            # Toxic: slow corrosion, occasionally neutralize a toxic particle
+                                                                             
             if toxic and get_toxic:
                 toxics = _limit(get_toxic(rp.x, rp.y, radius=1), MAX_N)
                 for tp in toxics:
@@ -328,21 +347,21 @@ def apply(game: Any) -> None:
                     except Exception:
                         pass
 
-    # Diamond interactions
+                          
     if diamond:
         for dp in list(diamond.particles):
-            # Toxic Waste: inert (no change)
+                                            
             if toxic and get_toxic:
-                _ = get_toxic(dp.x, dp.y, radius=1)  # ignored intentionally
-            # Lava: absorb heat slowly; potential sublimation to carbon gas
+                _ = get_toxic(dp.x, dp.y, radius=1)                         
+                                                                           
             if lava and get_lava:
                 lavas = get_lava(dp.x, dp.y, radius=1)
                 if lavas:
                     try:
                         dp.heat = getattr(dp, 'heat', 0.0) + 0.4 * len(lavas)
-                        # Sublimation threshold (very high heat)
+                                                                
                         if dp.heat > 220 and random.random() < 0.05:
-                            # Replace with carbon gas placeholder -> toxic particle tinted dark
+                                                                                               
                             try:
                                 toxic.add_particle(dp.x, dp.y)
                                 setattr(toxic.particles[-1], 'carbon_gas', True)
@@ -351,7 +370,7 @@ def apply(game: Any) -> None:
                             dp.dead = True
                     except Exception:
                         pass
-            # Blue Lava: convert to synthetic diamond (bluish & conductive)
+                                                                           
             if blue_lava and get_bluelava:
                 bls = get_bluelava(dp.x, dp.y, radius=1)
                 if bls:
@@ -360,7 +379,7 @@ def apply(game: Any) -> None:
                         dp.heat = min(300.0, getattr(dp, 'heat', 0.0) + 1.0 * len(bls))
                     except Exception:
                         pass
-            # Blood: stain only
+                               
             if blood and get_blood:
                 bloods = get_blood(dp.x, dp.y, radius=1)
                 if bloods:
@@ -368,7 +387,7 @@ def apply(game: Any) -> None:
                         dp.stained = True
                     except Exception:
                         pass
-            # Milk: frosting effect
+                                   
             if milk and get_milk:
                 milks = get_milk(dp.x, dp.y, radius=1)
                 if milks:
@@ -378,7 +397,7 @@ def apply(game: Any) -> None:
                         pass
                     if random.random() < 0.04:
                         toxic_to_kill.add(id(tp))
-            # Lava: heat up and charge over time
+                                                
             if lava and get_lava:
                 lavas = _limit(get_lava(rp.x, rp.y, radius=1), MAX_N)
                 if lavas:
@@ -388,7 +407,7 @@ def apply(game: Any) -> None:
                             rp.charged = True
                     except Exception:
                         pass
-            # Blue lava: overcharge and become unstable (may explode via ruby.update)
+                                                                                     
             if blue_lava and get_bluelava:
                 bls = _limit(get_bluelava(rp.x, rp.y, radius=1), MAX_N)
                 if bls:
@@ -398,7 +417,7 @@ def apply(game: Any) -> None:
                         rp.unstable = max(getattr(rp, 'unstable', 0), random.randint(20, 90))
                     except Exception:
                         pass
-            # Blood: curse
+                          
             if blood and get_blood:
                 bloods = _limit(get_blood(rp.x, rp.y, radius=1), MAX_N)
                 if bloods:
@@ -406,7 +425,7 @@ def apply(game: Any) -> None:
                         rp.cursed = True
                     except Exception:
                         pass
-            # Milk: dull/opaque
+                               
             if milk and get_milk:
                 milks = _limit(get_milk(rp.x, rp.y, radius=1), MAX_N)
                 if milks:
@@ -445,7 +464,7 @@ def apply(game: Any) -> None:
                     setattr(s, 'wet', True)
                 except Exception:
                     pass
-    # Water makes nearby dirt into mud (slower)
+                                               
     if dirt and water and get_dirt:
         for wp in _limit(list(water.particles), 2000):
             dirts = get_dirt(wp.x, wp.y, radius=1)
@@ -454,11 +473,11 @@ def apply(game: Any) -> None:
                     d.is_mud = True
                 except Exception:
                     pass
-                # Optional light absorption: rarely remove a water particle
-                # if random.random() < 0.02:
-                #     water_to_kill.add(id(wp))
+                                                                           
+                                            
+                                               
                 
-    # Toxic contaminates dirt
+                             
     if dirt and toxic and get_toxic and get_dirt:
         for tp in _limit(list(toxic.particles), 2000):
             dirts = get_dirt(tp.x, tp.y, radius=1)
@@ -467,7 +486,7 @@ def apply(game: Any) -> None:
                     d.contaminated = True
                 except Exception:
                     pass
-    # Milk interactions
+                       
     if milk and dirt and get_dirt:
         for mp in _limit(list(milk.particles), 1500):
             dirts = get_dirt(mp.x, mp.y, radius=1)
@@ -504,7 +523,7 @@ def apply(game: Any) -> None:
                     m.toxic = True
                 except Exception:
                     pass
-    # Blood interactions
+                        
     if blood and water and get_water and get_blood:
         for wp in _limit(list(water.particles), 1200):
             bloods = get_blood(wp.x, wp.y, radius=1)
@@ -551,7 +570,7 @@ def apply(game: Any) -> None:
             for b in bloods:
                 try:
                     b.curdled = True
-                    b.diluted = False  # pink chunky overrides dilution
+                    b.diluted = False                                  
                 except Exception:
                     pass
     if blood and lava and get_lava and get_blood:
@@ -562,7 +581,7 @@ def apply(game: Any) -> None:
                     b.dead = True
                 except Exception:
                     pass
-    # Optional simple corrosion placeholder: blood near metal darkens metal (TODO real rust)
+                                                                                            
     if blood and metal and get_blood:
         for mp in _limit(list(metal.particles), 800):
             bloods = get_blood(mp.x, mp.y, radius=1)
@@ -571,13 +590,13 @@ def apply(game: Any) -> None:
                     setattr(mp, 'rust_age', getattr(mp, 'rust_age', 0) + 1)
                 except Exception:
                     pass
-    # Contamination spreads slowly among dirt
+                                             
     if dirt:
         contaminated = [p for p in dirt.particles if getattr(p, 'contaminated', False)]
         for d in _limit(contaminated, 500):
             if getattr(d, 'age', 0) % 8 != 0:
                 continue
-            # spread to a couple nearby dirt
+                                            
             try:
                 nx = d.x + random.randint(-3, 3)
                 ny = d.y + random.randint(-3, 3)
@@ -588,7 +607,7 @@ def apply(game: Any) -> None:
             except Exception:
                 pass
 
-        # Remove mehedi behavior: ensure any prior 'mehedi' sand reverts to 'meh' image/state.
+                                                                                              
         if sand:
             try:
                 meh_img = getattr(game, '_meh_img', None)
@@ -642,3 +661,24 @@ def apply(game: Any) -> None:
             blood.sweep_dead()
         except Exception:
             pass
+
+                                         
+    if _registered_reactions:
+        for _, fn in list(_registered_reactions):
+            try:
+                fn(game)
+            except Exception:
+                                                                         
+                continue
+                                                                       
+        for sys_name in (
+            'sand_system','water_system','lava_system','blue_lava_system','toxic_system',
+            'oil_system','metal_system','dirt_system','milk_system','blood_system',
+            'ruby_system','diamond_system'
+        ):
+            try:
+                sys = getattr(game, sys_name, None)
+                if sys and hasattr(sys, 'sweep_dead'):
+                    sys.sweep_dead()
+            except Exception:
+                continue

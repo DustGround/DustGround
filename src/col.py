@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Tuple
 class SystemProps:
 	name: str
 	sys: Any
-	kind: str  # 'solid' or 'fluid'
+	kind: str                      
 	radius: float = 1.0
 	mass: float = 1.0
 	elasticity: float = 0.05
@@ -39,21 +39,21 @@ class CollisionManager:
 		self.world_w = int(world_w)
 		self.world_h = int(world_h)
 		self.systems: List[SystemProps] = []
-		self.blocks = None  # BlocksSystem
+		self.blocks = None                
 		self.enabled = True
 		self._frame_stride = 1
 
 	def register_system(self, name: str, sys: Any, *, kind: str, radius: float = 1.0,
-						mass: float = 1.0, elasticity: float = 0.05, friction: float = 0.02,
-						max_neighbors: int = 6):
+	     mass: float = 1.0, elasticity: float = 0.05, friction: float = 0.02,
+	     max_neighbors: int = 6):
 		self.systems.append(SystemProps(name=name, sys=sys, kind=kind, radius=radius,
-										mass=mass, elasticity=elasticity, friction=friction,
-										max_neighbors=max_neighbors))
+		        mass=mass, elasticity=elasticity, friction=friction,
+		        max_neighbors=max_neighbors))
 
 	def register_blocks(self, blocks_system: Any):
 		self.blocks = blocks_system
 
-	# --- internal helpers ---
+                           
 	def _neighbors_from(self, sp: SystemProps, x: float, y: float, radius_cells: int) -> List[Any]:
 		out: List[Any] = []
 		grid = sp.grid()
@@ -71,7 +71,7 @@ class CollisionManager:
 		return out
 
 	def _resolve_pair(self, A: SystemProps, B: SystemProps):
-		# Iterate the smaller system first for efficiency
+                                                   
 		plistA = A.particles()
 		plistB = B.particles()
 		if not plistA or not plistB:
@@ -80,11 +80,11 @@ class CollisionManager:
 			A, B = B, A
 			plistA, plistB = plistB, plistA
 
-		# Ensure grids are present
+                            
 		A.rebuild_grid()
 		B.rebuild_grid()
 
-		# collision thresholds
+                        
 		rsum_base = A.radius + B.radius
 		if A.kind == 'fluid' and B.kind == 'fluid':
 			thresh = max(2.2, rsum_base + 0.2)
@@ -103,7 +103,7 @@ class CollisionManager:
 		invMA = 1.0 / max(1e-6, A.mass)
 		invMB = 1.0 / max(1e-6, B.mass)
 
-		# Neighbor radius in grid cells (inflate a bit)
+                                                 
 		rad_cells = max(1, int(math.ceil(thresh / max(1, B.cell_size()))))
 
 		for p in plistA:
@@ -126,36 +126,36 @@ class CollisionManager:
 				if d2 <= 1e-12 or d2 > thresh2:
 					continue
 				d = math.sqrt(d2)
-				# Normal
+            
 				nx = dx / d
 				ny = dy / d
-				# Positional correction (symmetric, mass-weighted)
+                                                      
 				overlap = max(0.0, thresh - d)
 				if overlap <= 0:
 					continue
-				# weights so that heavier particles move less
+                                                 
 				wA = invMA / (invMA + invMB)
 				wB = invMB / (invMA + invMB)
-				# Solids separate more firmly; fluids are soft
+                                                  
 				sep_scale = 0.9 if (A.kind == 'solid' and B.kind == 'solid') else 0.6
 				ax = -nx * overlap * wA * sep_scale
 				ay = -ny * overlap * wA * sep_scale
 				bx = nx * overlap * wB * sep_scale
 				by = ny * overlap * wB * sep_scale
-				# Apply to positions
+                        
 				try:
 					p.x += ax; p.y += ay
 					q.x += bx; q.y += by
 				except Exception:
 					pass
-				# Velocity response – small impulse along normal
+                                                    
 				pvx = getattr(p, 'vx', 0.0); pvy = getattr(p, 'vy', 0.0)
 				qvx = getattr(q, 'vx', 0.0); qvy = getattr(q, 'vy', 0.0)
 				rvx = pvx - qvx
 				rvy = pvy - qvy
 				vn = rvx * nx + rvy * ny
 				if vn < 0.0:
-					# Closing velocity; apply impulse
+                                      
 					e = elasticity
 					j = -(1 + e) * vn / (invMA + invMB)
 					impAx = -j * invMA * nx
@@ -170,7 +170,7 @@ class CollisionManager:
 					except Exception:
 						pass
 				else:
-					# Light tangential friction to damp glancing motions
+                                                         
 					tf = (A.friction + B.friction) * 0.5
 					try:
 						p.vx *= 1.0 - tf
@@ -202,7 +202,7 @@ class CollisionManager:
 				inside = False
 			if not inside:
 				continue
-			# Push out to nearest free neighbor (simple 4-neigh search)
+                                                              
 			dirs = [(0, -1), (0, 1), (-1, 0), (1, 0)]
 			best = None
 			for dx, dy in dirs:
@@ -214,13 +214,13 @@ class CollisionManager:
 				except Exception:
 					continue
 			if best is None:
-				# fallback: move upward one pixel
+                                     
 				best = (0, -1)
 			bx, by = best
 			try:
 				p.x = float(ix + bx)
 				p.y = float(iy + by)
-				# damp velocity
+                   
 				if hasattr(p, 'vx'):
 					p.vx *= -0.05
 				if hasattr(p, 'vy'):
@@ -231,7 +231,7 @@ class CollisionManager:
 	def apply(self, frame_index: int = 0):
 		if not self.enabled or not self.systems:
 			return
-		# Dynamic stride to protect FPS on large scenes
+                                                 
 		total = sum(len(sp.particles()) for sp in self.systems)
 		if total > 120_000:
 			self._frame_stride = 3
@@ -242,7 +242,7 @@ class CollisionManager:
 		if (frame_index % self._frame_stride) != 0:
 			return
 
-		# Cross-system pairs
+                      
 		n = len(self.systems)
 		for i in range(n):
 			Si = self.systems[i]
@@ -251,9 +251,9 @@ class CollisionManager:
 				try:
 					self._resolve_pair(Si, Sj)
 				except Exception:
-					# Keep sim running even if a pair fails
+                                            
 					continue
-		# Light block correction pass (after pairs)
+                                             
 		try:
 			for S in self.systems:
 				self._resolve_blocks(S)
@@ -261,10 +261,10 @@ class CollisionManager:
 			pass
 
 
-# Convenience for typical registrations
+                                       
 def default_register_all(game: Any) -> CollisionManager:
 	cm = CollisionManager(game.game_width, game.height)
-	# solids / granular
+                    
 	cm.register_system('sand', game.sand_system, kind='solid', radius=1.0, mass=1.0)
 	if hasattr(game, 'dirt_system'):
 		cm.register_system('dirt', game.dirt_system, kind='solid', radius=1.0, mass=1.1)
@@ -273,7 +273,7 @@ def default_register_all(game: Any) -> CollisionManager:
 		cm.register_system('ruby', game.ruby_system, kind='solid', radius=1.0, mass=2.2)
 	if hasattr(game, 'diamond_system'):
 		cm.register_system('diamond', game.diamond_system, kind='solid', radius=1.0, mass=1.9)
-	# fluids
+         
 	cm.register_system('water', game.water_system, kind='fluid', radius=1.1, mass=0.8, elasticity=0.03)
 	if hasattr(game, 'milk_system'):
 		cm.register_system('milk', game.milk_system, kind='fluid', radius=1.1, mass=0.9, elasticity=0.03)
@@ -285,6 +285,6 @@ def default_register_all(game: Any) -> CollisionManager:
 	cm.register_system('toxic', game.toxic_system, kind='fluid', radius=1.1, mass=1.5, elasticity=0.03)
 	if hasattr(game, 'blood_system'):
 		cm.register_system('blood', game.blood_system, kind='fluid', radius=1.1, mass=1.1, elasticity=0.03)
-	# blocks (static obstacles)
+                            
 	cm.register_blocks(game.blocks_system)
 	return cm

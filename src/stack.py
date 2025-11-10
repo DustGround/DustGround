@@ -5,9 +5,9 @@ from typing import Dict, List, Tuple, Any, Optional, Iterable
 class StackEntry:
 	__slots__ = ("obj", "material", "z", "x", "y")
 	def __init__(self, obj: Any, material: str, z: int, x: int, y: int):
-		self.obj = obj          # particle or entity reference
+		self.obj = obj                                        
 		self.material = material
-		self.z = z              # layer index within cell (0 bottom)
+		self.z = z                                                  
 		self.x = x
 		self.y = y
 
@@ -17,28 +17,28 @@ class StackEntry:
 class StackManager:
 	def __init__(self, max_height: Optional[int] = None, auto_compact_interval: int = 600):
 		self._cells: Dict[Tuple[int,int], List[StackEntry]] = {}
-		self._index: Dict[int, StackEntry] = {}  # id(obj) -> entry
+		self._index: Dict[int, StackEntry] = {}                    
 		self.max_height = max_height
 		self._frame = 0
 		self._auto_compact_interval = max(60, int(auto_compact_interval))
-		# Optional material density ordering: lower value sinks (placed lower) when reordering
+                                                                                        
 		self.material_density: Dict[str, float] = {
-			'blocks': 9.0,
-			'metal': 8.0,
-			'ruby': 7.5,
-			'diamond': 7.4,
-			'lava': 7.0,
-			'bluelava': 7.2,
-			'toxic': 3.0,
-			'oil': 2.5,
-			'water': 2.0,
-			'milk': 2.1,
-			'blood': 2.2,
-			'sand': 4.0,
-			'dirt': 4.5,
+		 'blocks': 9.0,
+		 'metal': 8.0,
+		 'ruby': 7.5,
+		 'diamond': 7.4,
+		 'lava': 7.0,
+		 'bluelava': 7.2,
+		 'toxic': 3.0,
+		 'oil': 2.5,
+		 'water': 2.0,
+		 'milk': 2.1,
+		 'blood': 2.2,
+		 'sand': 4.0,
+		 'dirt': 4.5,
 		}
 
-	# ------------------------------ Core ops ------------------------------ #
+                                                                           
 	def add(self, x: int, y: int, obj: Any, material: str) -> int:
 		"""Add an object at integer cell (x,y). Returns assigned z index.
 		If max_height is set and would exceed, skip adding and return top z."""
@@ -48,11 +48,11 @@ class StackManager:
 			lst = []
 			self._cells[cell] = lst
 		if self.max_height is not None and len(lst) >= self.max_height:
-			# Reject addition; return current top index (len(lst)-1)
+                                                           
 			return len(lst) - 1
 		entry = StackEntry(obj=obj, material=material, z=0, x=cell[0], y=cell[1])
 		lst.append(entry)
-		# Reorder to respect density (denser -> lower). Stable sort by density.
+                                                                         
 		dens = self.material_density
 		lst.sort(key=lambda e: dens.get(e.material, 5.0))
 		for i, ent in enumerate(lst):
@@ -82,7 +82,7 @@ class StackManager:
 			lst.remove(e)
 		except ValueError:
 			pass
-		# Reassign z for remaining
+                            
 		for i, ent in enumerate(lst):
 			ent.z = i
 			try:
@@ -102,7 +102,7 @@ class StackManager:
 		new_cell = (int(new_x), int(new_y))
 		if (e.x, e.y) == new_cell:
 			return e.z
-		# Remove from old cell
+                        
 		old_cell = (e.x, e.y)
 		lst_old = self._cells.get(old_cell)
 		if lst_old and e in lst_old:
@@ -115,18 +115,18 @@ class StackManager:
 					pass
 			if not lst_old:
 				self._cells.pop(old_cell, None)
-		# Add to new cell (append)
+                            
 		lst_new = self._cells.get(new_cell)
 		if lst_new is None:
 			lst_new = []
 			self._cells[new_cell] = lst_new
 		if self.max_height is not None and len(lst_new) >= self.max_height:
-			# Put it back to old location forcibly (reject move)
+                                                       
 			self.add(e.x, e.y, obj, e.material)
 			return e.z
 		e.x, e.y = new_cell
 		lst_new.append(e)
-		# Reorder respecting density
+                              
 		dens = self.material_density
 		lst_new.sort(key=lambda en: dens.get(en.material, 5.0))
 		for i, ent in enumerate(lst_new):
@@ -138,7 +138,7 @@ class StackManager:
 				pass
 		return e.z
 
-	# --------------------------- Query operations -------------------------- #
+                                                                            
 	def get_stack(self, x: int, y: int) -> List[StackEntry]:
 		return list(self._cells.get((int(x), int(y)), []))
 
@@ -166,7 +166,7 @@ class StackManager:
 			if lst:
 				yield lst[-1]
 
-	# ----------------------------- Maintenance ----------------------------- #
+                                                                            
 	def compact(self) -> None:
 		"""Remove entries whose obj appears dead / missing, reindex layers."""
 		to_delete = []
@@ -190,7 +190,7 @@ class StackManager:
 		for c in to_delete:
 			self._cells.pop(c, None)
 
-	# --------------------------- Advanced operations ----------------------- #
+                                                                            
 	def promote(self, obj: Any) -> int:
 		"""Move object one layer up within its cell (if possible). Returns new z."""
 		e = self._index.get(id(obj))
@@ -247,10 +247,10 @@ class StackManager:
 		self.max_height = new_max
 		if new_max is None:
 			return
-		# Trim any stacks above new max
+                                 
 		for cell, lst in list(self._cells.items()):
 			if len(lst) > new_max:
-				# Remove top extras
+                       
 				to_trim = lst[new_max:]
 				for ent in to_trim:
 					self._index.pop(id(ent.obj), None)
@@ -280,18 +280,18 @@ class StackManager:
 		self._index.clear()
 		if material_map is None:
 			material_map = {
-				'sand': 'sand_system',
-				'water': 'water_system',
-				'lava': 'lava_system',
-				'bluelava': 'blue_lava_system',
-				'toxic': 'toxic_system',
-				'oil': 'oil_system',
-				'metal': 'metal_system',
-				'ruby': 'ruby_system',
-				'milk': 'milk_system',
-				'dirt': 'dirt_system',
-				'blood': 'blood_system',
-				'blocks': 'blocks_system'
+			 'sand': 'sand_system',
+			 'water': 'water_system',
+			 'lava': 'lava_system',
+			 'bluelava': 'blue_lava_system',
+			 'toxic': 'toxic_system',
+			 'oil': 'oil_system',
+			 'metal': 'metal_system',
+			 'ruby': 'ruby_system',
+			 'milk': 'milk_system',
+			 'dirt': 'dirt_system',
+			 'blood': 'blood_system',
+			 'blocks': 'blocks_system'
 			}
 		for mat, attr in material_map.items():
 			sys_obj = getattr(game, attr, None)
@@ -306,17 +306,17 @@ class StackManager:
 					continue
 				self.add(x, y, p, mat)
 
-	# ------------------------------ Debug / Info --------------------------- #
+                                                                            
 	def stats(self) -> Dict[str, int]:
 		total_entries = sum(len(v) for v in self._cells.values())
 		occupied_cells = len(self._cells)
 		tallest = max((len(v) for v in self._cells.values()), default=0)
 		return {
-			'entries': total_entries,
-			'cells': occupied_cells,
-			'tallest_stack': tallest,
-			'max_height': self.max_height if self.max_height is not None else -1,
-			'avg_height': (total_entries / occupied_cells) if occupied_cells else 0.0,
+		 'entries': total_entries,
+		 'cells': occupied_cells,
+		 'tallest_stack': tallest,
+		 'max_height': self.max_height if self.max_height is not None else -1,
+		 'avg_height': (total_entries / occupied_cells) if occupied_cells else 0.0,
 		}
 
 	def describe_column(self, x: int, y: int) -> List[Tuple[str,int]]:
@@ -325,7 +325,7 @@ class StackManager:
 		return [(e.material, e.z) for e in lst]
 
 
-# Convenience singleton pattern (optional)
+                                          
 _GLOBAL_STACK: Optional[StackManager] = None
 
 def get_stack_manager() -> StackManager:
@@ -340,9 +340,9 @@ def integrate_game(game: Any) -> StackManager:
 	return mgr
 
 __all__ = [
-	'StackEntry',
-	'StackManager',
-	'get_stack_manager',
-	'integrate_game'
+ 'StackEntry',
+ 'StackManager',
+ 'get_stack_manager',
+ 'integrate_game'
 ]
 

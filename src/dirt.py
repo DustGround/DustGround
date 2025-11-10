@@ -21,16 +21,16 @@ class DirtSystem:
 		self.width = width
 		self.height = height
 		self.particles: List[DirtParticle] = []
-		# Discrete granular update tuned for stable piles
-		self.gravity = 0.32  # kept for compatibility; not directly integrated as velocity
-		self.friction = 0.06 # kept for compatibility
-		self.cell_size = 1   # operate on pixel grid for dirt
+                                                   
+		self.gravity = 0.32                                                               
+		self.friction = 0.06                         
+		self.cell_size = 1                                   
 		self.grid: Dict[Tuple[int, int], List[DirtParticle]] = {}
-		# Integer-pixel occupancy for granular settling
+                                                 
 		self.occ: Dict[Tuple[int, int], int] = {}
-		# Max pixels to fall per frame (faster settling in fullscreen)
+                                                                
 		self.fall_max: int = 3
-		# Number of relaxation passes per frame to allow stacked columns to cascade
+                                                                             
 		self.relax_passes: int = 4
 		self.skip_mod: int = 1
 		self._is_solid = None
@@ -56,7 +56,7 @@ class DirtSystem:
 		return (int(x // self.cell_size), int(y // self.cell_size))
 
 	def _rebuild_grid(self):
-		# For compatibility if something else inspects grid, but main collision uses occ
+                                                                                  
 		self.grid.clear()
 		self.occ.clear()
 		for p in self.particles:
@@ -72,14 +72,14 @@ class DirtSystem:
 		return self.occ.get((xi, yi), 0) > 0
 
 	def _get_neighbors(self, x: float, y: float, radius: int=1) -> List[DirtParticle]:
-		# Unused in the new discrete update, kept for API compatibility
+                                                                 
 		return []
 
 	def update(self, frame_index: int=0):
-		# Age particles (kept for reactions) and rebuild occupancy from current positions
+                                                                                   
 		for p in self.particles:
 			p.age += 1
-		# boundaries
+              
 		for p in self.particles:
 			if p.y + 1 >= self.height:
 				p.y = self.height - 1
@@ -93,7 +93,7 @@ class DirtSystem:
 			if p.x >= self.width:
 				p.x = self.width - 1
 				p.vx *= -0.2
-		# granular discrete update with multiple relaxation passes
+                                                            
 		for _pass in range(self.relax_passes):
 			self._rebuild_grid()
 			order = list(range(len(self.particles)))
@@ -103,7 +103,7 @@ class DirtSystem:
 				xi, yi = int(p.x), int(p.y)
 				if xi < 0 or xi >= self.width or yi < 0 or yi >= self.height:
 					continue
-				# fall straight down up to fall_max
+                                       
 				max_fall = 2 if p.is_mud else self.fall_max
 				falls = 0
 				while falls < max_fall and not self._occupied(xi, yi + 1):
@@ -112,7 +112,7 @@ class DirtSystem:
 					p.y = float(yi)
 					self.occ[(xi, yi)] = self.occ.get((xi, yi), 0) + 1
 					falls += 1
-				# if cannot fall this pass, try diagonals
+                                             
 				if falls == 0:
 					dirs = [-1, 1]
 					if random.random() < 0.5:
@@ -126,7 +126,7 @@ class DirtSystem:
 							p.y = float(yi)
 							self.occ[(xi, yi)] = self.occ.get((xi, yi), 0) + 1
 							break
-		# keep particles in reasonable range
+                                      
 		self.particles = [p for p in self.particles if -10 <= p.x < self.width + 10 and -10 <= p.y < self.height + 10]
 
 	def draw(self, surface: pygame.Surface):

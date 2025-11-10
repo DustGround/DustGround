@@ -28,7 +28,7 @@ class BloodSystem:
         self.width = width
         self.height = height
         self.particles: List[BloodParticle] = []
-        self.gravity = 0.7  # heavy fluid feel
+        self.gravity = 0.7                    
         self.low_speed_damp = 0.9
         self.high_speed_damp = 0.975
         self.shear_ref = 2.0
@@ -144,13 +144,13 @@ class BloodSystem:
         for p in self.particles:
             if p.dead:
                 continue
-            # Gravity & aging
+                             
             p.vy += self.gravity
             p.age += 1
-            # Coagulation threshold
+                                   
             if not p.clotted and p.age >= self.clot_frames:
                 p.clotted = True
-            # Effective viscosity blend
+                                       
             speed = (p.vx * p.vx + p.vy * p.vy) ** 0.5
             t = speed / (speed + self.shear_ref) if speed > 0.0 else 0.0
             clot_frac = min(1.0, p.age / float(self.clot_frames))
@@ -158,13 +158,13 @@ class BloodSystem:
             eff_high = max(0.85, self.high_speed_damp - min(0.03, clot_frac * 0.015))
             damping = eff_low * (1.0 - t) + eff_high * t
             if p.clotted:
-                # Extra damping when clotted
+                                            
                 p.vx *= 0.5
                 p.vy *= 0.5
             else:
                 p.vx *= damping
                 p.vy *= damping
-            # State-based extra effects
+                                       
             if p.diluted:
                 p.vx *= 0.95; p.vy *= 0.95
             if p.curdled:
@@ -173,13 +173,13 @@ class BloodSystem:
                 p.vx *= 1.02; p.vy *= 1.02
             p.x += p.vx
             p.y += p.vy
-            # Collision with solid obstacles
+                                            
             if self._is_solid and self._is_solid(int(p.x), int(p.y)):
                 p.x -= p.vx
                 p.y -= p.vy
                 p.vx *= -0.08
                 p.vy = 0.0
-            # Boundaries
+                        
             if p.x < 0:
                 p.x = 0; p.vx *= -0.12
             elif p.x > self.width - 1:
@@ -193,10 +193,10 @@ class BloodSystem:
                 if abs(p.vy) < 0.06:
                     p.vy = 0.0
                     p.vx += random.uniform(-0.02, 0.02)
-        # Rebuild & collide
+                           
         self._rebuild_grid()
         self._handle_collisions(frame_index)
-        # Cull
+              
         self.particles = [p for p in self.particles if not p.dead and -10 <= p.x < self.width + 10 and -10 <= p.y < self.height + 10]
 
     def draw(self, surf: pygame.Surface):

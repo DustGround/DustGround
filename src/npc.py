@@ -27,7 +27,7 @@ class NPC:
         self.constraints = []
         self.burn_timer = 0
         self.toxic_timer = 0
-        # Spawn centered around click with full body visible (head above, feet below)
+                                                                                     
         head = Particle((x, y - 60))
         t1 = Particle((x, y - 30))
         t2 = Particle((x, y))
@@ -66,11 +66,11 @@ class NPC:
         self._frame_counter = 0
         self._torso_still_frames = 0
         self._sleep_torso = False
-        # Hard freeze mode (guaranteed no jitter for torso/head). Disabled by default.
+                                                                                      
         self.freeze_torso = False
-        # Layout offsets kept for potential future freeze usage
+                                                               
         self._torso_layout = {0: -60, 1: -30, 2: 0, 3: 30, 4: 60}
-        # Track feet contact externally for neck stabilization
+                                                              
         self._feet_grounded = 0
 
     def apply_global_force(self, f):
@@ -88,7 +88,7 @@ class NPC:
             p.apply_force(self.gravity * p.mass)
         for p in self.particles:
             p.update(dt)
-        # Clamp per-step displacement to avoid explosions
+                                                         
         max_step = 40.0
         for p in self.particles:
             sx = p.pos.x - p.prev.x
@@ -100,7 +100,7 @@ class NPC:
                     s = max_step / d
                     p.pos.x = p.prev.x + sx * s
                     p.pos.y = p.prev.y + sy * s
-        # Early boundary clamp to keep particles in-bounds even if constraints fail later
+                                                                                         
         if bounds is not None:
             w, h = bounds
             for p in self.particles:
@@ -117,12 +117,12 @@ class NPC:
                 self._nudge_particle_from_solid(part, solid_query, bounds)
         feet_grounded, ground_y = self._resolve_block_contacts(solid_query, bounds)
         self._feet_grounded = feet_grounded
-        # Determine rigid posture activation (guaranteed still torso/head when fully grounded)
+                                                                                              
         rigid_active = (ground_y is not None and feet_grounded == 2 and not self.user_dragging)
         if rigid_active:
             fx = (self.particles[7].pos.x + self.particles[8].pos.x) * 0.5
             base_y = ground_y - 60
-            # Head -> pelvis vertical layout (head highest)
+                                                           
             layout = [base_y - 120, base_y - 90, base_y - 60, base_y - 30, base_y]
             for idx, part in zip((0,1,2,3,4), layout):
                 p = self.particles[idx]
@@ -130,29 +130,29 @@ class NPC:
                 p.pos.y = part
                 p.prev.x = p.pos.x
                 p.prev.y = p.pos.y
-            # Freeze limbs at stable offsets relative to pelvis
+                                                               
             pelvis_y = base_y
-            # Arms: hang down alongside torso when grounded
-            arm_y = base_y - 10  # below torso mid, near hips (downward)
+                                                           
+            arm_y = base_y - 10                                         
             left_arm = self.particles[5]; right_arm = self.particles[6]
             left_arm.pos.x = fx - 10; left_arm.pos.y = arm_y
             right_arm.pos.x = fx + 10; right_arm.pos.y = arm_y
             left_arm.prev.x = left_arm.pos.x; left_arm.prev.y = left_arm.pos.y
             right_arm.prev.x = right_arm.pos.x; right_arm.prev.y = right_arm.pos.y
-            # Legs: stance width, feet on ground
+                                                
             foot_y = ground_y
             left_leg = self.particles[7]; right_leg = self.particles[8]
             left_leg.pos.x = fx - 14; left_leg.pos.y = foot_y
             right_leg.pos.x = fx + 14; right_leg.pos.y = foot_y
             left_leg.prev.x = left_leg.pos.x; left_leg.prev.y = left_leg.pos.y
             right_leg.prev.x = right_leg.pos.x; right_leg.prev.y = right_leg.pos.y
-        # Apply stand controller only every other frame to reduce oscillations
+                                                                              
         if (not self.freeze_torso) and (not rigid_active) and self._frame_counter % 2 == 0:
             self._apply_stand_controller(dt * 0.6, ground_y)
         for _ in range(self.iterations):
             for i, j, rest in self.constraints:
                 if (self.freeze_torso or rigid_active) and (i in (0,1,2,3,4,5,6,7,8) or j in (0,1,2,3,4,5,6,7,8)):
-                    # Skip all constraints while rigid to keep exact pose
+                                                                         
                     continue
                 pa = self.particles[i]
                 pb = self.particles[j]
@@ -164,13 +164,13 @@ class NPC:
                 correction = delta * 0.5 * diff
                 pa.pos += correction
                 pb.pos -= correction
-                # Stretch limiter: reduce large stretches aggressively
+                                                                      
                 if d > rest * 1.3:
                     pull = (d - rest * 1.1) / d
                     adjust = delta * (pull * 0.4)
                     pa.pos += adjust * -0.5
                     pb.pos += adjust * 0.5
-        # Remove aggressive post-solve lateral snapping (can cause explosions)
+                                                                              
         if bounds is not None:
             w, h = bounds
             for p in self.particles:
@@ -185,10 +185,10 @@ class NPC:
         if solid_query is not None:
             for part in self.particles:
                 self._nudge_particle_from_solid(part, solid_query, bounds)
-        # Torso lateral averaging to damp jitter
+                                                
         torso = (0, 1, 2, 3, 4)
         if rigid_active:
-            # Ensure entire body remains perfectly still; skip smoothing and return
+                                                                                   
             for i in range(len(self.particles)):
                 p = self.particles[i]
                 p.prev.x = p.pos.x
@@ -200,15 +200,15 @@ class NPC:
             return
         if self.freeze_torso:
             pelvis = self.particles[4].pos
-            # Anchor pelvis horizontally to feet midpoint for stable stance
+                                                                           
             if bounds is not None:
                 fx = (self.particles[7].pos.x + self.particles[8].pos.x) * 0.5
                 pelvis.x = fx
-            # Rebuild frozen torso chain
+                                        
             for idx in torso:
                 off = self._torso_layout.get(idx, 0)
                 p = self.particles[idx]
-                target_y = pelvis.y + off - 60  # subtract pelvis baseline
+                target_y = pelvis.y + off - 60                            
                 p.pos.x = pelvis.x
                 p.pos.y = target_y
                 p.prev.x = p.pos.x
@@ -222,14 +222,14 @@ class NPC:
         for i in torso:
             p = self.particles[i]
             p.pos.x = p.pos.x * 0.9 + avg_x * 0.1
-        # Additional velocity damping for torso
+                                               
         for i in torso:
             p = self.particles[i]
             vx = p.pos.x - p.prev.x
             vy = p.pos.y - p.prev.y
             p.prev.x = p.pos.x - vx * 0.6
             p.prev.y = p.pos.y - vy * 0.6
-        # Update torso sleep state based on residual motion and foot contact
+                                                                            
         avg_v = 0.0
         for i in torso:
             p = self.particles[i]
@@ -245,25 +245,25 @@ class NPC:
             self._torso_still_frames = 0
             if avg_v > 0.3:
                 self._sleep_torso = False
-        # When sleeping and both feet grounded, hard-freeze torso velocities
+                                                                            
         if self._sleep_torso and feet_grounded == 2 and not self.user_dragging:
             for i in torso:
                 p = self.particles[i]
                 p.prev.x = p.pos.x
                 p.prev.y = p.pos.y
-            # Also freeze neck/head explicitly to eliminate residual twitch
+                                                                           
             for i in (0,1):
                 p = self.particles[i]
                 p.prev.x = p.pos.x
                 p.prev.y = p.pos.y
         else:
-            # Neck micro-stabilization when grounded and calm (before full sleep)
+                                                                                 
             if feet_grounded == 2 and not self.user_dragging and avg_v < 0.25:
                 for i in (0,1):
                     p = self.particles[i]
                     vx = p.pos.x - p.prev.x
                     vy = p.pos.y - p.prev.y
-                    if vx*vx + vy*vy < 0.04:  # ~0.2 px threshold
+                    if vx*vx + vy*vy < 0.04:                     
                         p.prev.x = p.pos.x
                         p.prev.y = p.pos.y
         if self.burn_timer > 0:
@@ -442,7 +442,7 @@ class NPC:
 
     def _apply_motors(self, targets: dict[int, pygame.math.Vector2], strength: float, damping: float, dt: float):
         if self.freeze_torso:
-            # Ignore torso/head targets when frozen
+                                                   
             targets = {k: v for k, v in targets.items() if k not in (0,1,2,3,4)}
         k = min(1.0, max(0.0, dt * 60.0))
         for idx, tgt in targets.items():
@@ -453,7 +453,7 @@ class NPC:
             dy = tgt.y - p.pos.y
             if abs(dx) < 0.5 and abs(dy) < 0.5:
                 continue
-            # Per-part gains: feet smaller X, torso/head smaller overall
+                                                                        
             if idx in (7, 8):
                 sx, sy = (0.5, 1.0)
                 gain = 0.8
@@ -468,7 +468,7 @@ class NPC:
                 cap = 8.0
             mx = dx * strength * 0.5 * k * sx * gain
             my = dy * strength * 1.0 * k * sy * gain
-            # Cap motor move per frame to avoid spikes (per-part caps)
+                                                                      
             if mx > cap:
                 mx = cap
             elif mx < -cap:
@@ -482,11 +482,11 @@ class NPC:
             p.prev.x = p.pos.x - (p.pos.x - p.prev.x) * damping
             p.prev.y = p.pos.y - (p.pos.y - p.prev.y) * damping
 
-        # Sleep tiny motions to kill residual jitter
+                                                    
         for p in self.particles:
             vx = p.pos.x - p.prev.x
             vy = p.pos.y - p.prev.y
-            if vx * vx + vy * vy < 0.09:  # ~0.3 px threshold
+            if vx * vx + vy * vy < 0.09:                     
                 p.prev.x = p.pos.x
                 p.prev.y = p.pos.y
 
@@ -496,8 +496,8 @@ class NPC:
             fx = (self.particles[7].pos.x + self.particles[8].pos.x) * 0.5
         else:
             fx = pelvis.x
-        # Hard lock anchor to feet midpoint for strict upright alignment
-        # Smooth anchor instead of hard lock to reduce jump-to-top jitter
+                                                                        
+                                                                         
         if self._stand_anchor_x is None:
             self._stand_anchor_x = fx
         else:
@@ -511,7 +511,7 @@ class NPC:
         targets[2] = pygame.math.Vector2(base_x, targets[3].y - spacing)
         targets[1] = pygame.math.Vector2(base_x, targets[2].y - spacing)
         targets[0] = pygame.math.Vector2(base_x, targets[1].y - self.head_size * 0.6)
-        # Slightly wider stance for a more natural look
+                                                       
         foot_off = 14
         targets[7] = pygame.math.Vector2(base_x - foot_off, gy)
         targets[8] = pygame.math.Vector2(base_x + foot_off, gy)
@@ -524,11 +524,11 @@ class NPC:
         if self.freeze_torso:
             return
         targets = self._stand_targets(ground_y)
-        # Stronger posture when not dragged; slightly gentler when user is interacting
+                                                                                      
         strength = 6.0 if self.user_dragging else 8.0
         damping = 0.9 if self.user_dragging else 0.925
         if self._sleep_torso:
-            # Replace torso targets with their current positions to avoid jitter; keep feet alignment
+                                                                                                     
             for idx in (0,1,2,3,4):
                 p = self.particles[idx]
                 targets[idx].x = p.pos.x

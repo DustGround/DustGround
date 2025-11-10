@@ -143,7 +143,7 @@ class SandSystem:
     def draw(self, surface: pygame.Surface):
         for particle in self.particles:
             if 0 <= particle.x < self.width and 0 <= particle.y < self.height:
-                # If a particle carries an image (e.g., plugin-added), blit it centered
+                                                                                       
                 img = getattr(particle, 'image', None)
                 if img is not None:
                     try:

@@ -20,10 +20,10 @@ class DiamondParticle:
         self.age = 0
         self.heat = 0.0
         self.last_heat = 0.0
-        # states
-        self.synthetic = False   # bluish, slightly conductive
-        self.stained = False     # blood stains
-        self.frosted = False     # milk frosting effect
+                
+        self.synthetic = False                                
+        self.stained = False                   
+        self.frosted = False                           
         self.dead = False
 
 
@@ -32,7 +32,7 @@ class DiamondSystem:
         self.width = width
         self.height = height
         self.particles: List[DiamondParticle] = []
-        # Medium density, slightly lighter than Ruby
+                                                    
         self.gravity = 0.30
         self.friction = 0.012
         self.cell_size = 3
@@ -41,16 +41,16 @@ class DiamondSystem:
         self.max_neighbors = 12
         self.skip_mod = 1
         self._is_solid = None
-        # visual base (shifted to a richer blue)
-        self.base_color = (140, 190, 255)      # more saturated blue
-        self.synthetic_color = (110, 175, 255) # bluish synthetic look
+                                                
+        self.base_color = (140, 190, 255)                           
+        self.synthetic_color = (110, 175, 255)                        
         self.stained_tint = (220, 60, 60)
         self.frost_tint = (240, 240, 250)
-        # bluish refractive halo
+                                
         self._refract = self._make_refract_surface(6)
 
     def _make_refract_surface(self, radius: int) -> pygame.Surface:
-        # Slight refractive bloom (bluish core fading out)
+                                                          
         d = radius * 2 + 1
         s = pygame.Surface((d, d), pygame.SRCALPHA)
         for r in range(radius, 0, -1):
@@ -128,13 +128,13 @@ class DiamondSystem:
     def update(self, frame_index: int = 0):
         for p in self.particles:
             p.age += 1
-            # simple physics
+                            
             p.vy += self.gravity
             p.vx *= (1 - self.friction)
             p.vy *= (1 - self.friction * 0.5)
             p.x += p.vx
             p.y += p.vy
-            # boundaries & obstacles
+                                    
             if self._is_solid and self._is_solid(int(p.x), int(p.y)):
                 p.x -= p.vx
                 p.y -= p.vy
@@ -144,23 +144,23 @@ class DiamondSystem:
                 p.y = self.height - 1
                 p.vy = 0.0
 
-            # Heat relaxation (cool down slowly)
+                                                
             p.heat = max(0.0, p.heat - 0.02)
 
         self._rebuild_grid()
         if self.skip_mod == 1 or frame_index % self.skip_mod == 0:
             self._collide()
 
-        # Shatter check: only on sudden temperature shock
+                                                         
         for p in list(self.particles):
             d_heat = abs(p.heat - p.last_heat)
             p.last_heat = p.heat
             if d_heat >= 50.0:
-                # extreme shock -> high chance to shatter
+                                                         
                 if random.random() < 0.6:
                     p.dead = True
             elif d_heat >= 25.0:
-                # moderate shock -> rare shatter
+                                                
                 if random.random() < 0.2:
                     p.dead = True
         self.sweep_dead()
@@ -174,9 +174,9 @@ class DiamondSystem:
             if x < 0 or x >= w or y < 0 or y >= h:
                 continue
             col = self.synthetic_color if p.synthetic else self.base_color
-            # stain overlay (reddish) and frosting (whitish) as simple blends
+                                                                             
             if p.frosted:
-                # lighten
+                         
                 col = (
                     min(255, int(col[0] * 0.9 + self.frost_tint[0] * 0.1)),
                     min(255, int(col[1] * 0.9 + self.frost_tint[1] * 0.1)),
@@ -190,9 +190,9 @@ class DiamondSystem:
                 )
             surf.set_at((x, y), col)
             if refr is not None:
-                # base blue halo
+                                
                 surf.blit(refr, (x - rr, y - rr), special_flags=pygame.BLEND_ADD)
-                # synthetic diamonds get a slightly stronger halo
+                                                                 
                 if p.synthetic:
                     surf.blit(refr, (x - rr, y - rr), special_flags=pygame.BLEND_ADD)
 
@@ -203,5 +203,5 @@ class DiamondSystem:
             x, y = int(p.x), int(p.y)
             if 0 <= x < w and 0 <= y < h:
                 pts.append((x, y))
-        # Use base color for GPU point draw; CPU draw handles shading
+                                                                     
         return (self.base_color, pts)

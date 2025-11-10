@@ -98,7 +98,7 @@ class ParticleGame:
         if hasattr(self, 'diamond_system'):
             self.diamond_system.set_obstacle_query(self._is_solid_obstacle)
         self.blocks_system.set_external_obstacle(self.metal_system.is_solid)
-        # Universal collision manager: cross-material collisions + block correction
+                                                                                   
         try:
             self.collision = default_register_all(self)
         except Exception:
@@ -187,7 +187,7 @@ class ParticleGame:
         self._ui_metal_tex = None
         self._ui_dirt_tex = None
         self._ui_blocks_tex = None
-    # Removed AIR overlay support: no air texture caching
+                                                         
         self._ui_admin_tex = None
         self.ui_tiles = [
             {'key': 'blocks', 'label': 'BLOCKS', 'color': (180, 180, 190), 'surf': self.ui_blocks_surf},
@@ -205,12 +205,12 @@ class ParticleGame:
             {'key': 'blood', 'label': 'BLOOD', 'color': (170, 20, 30), 'surf': self._load_image('src/assets/blood.png') or self.ui_oil_surf},
             {'key': 'npc', 'label': 'NPC', 'color': (180, 180, 200), 'surf': self.ui_npc_surf}
         ]
-        # AIR tile removed entirely
+                                   
         self.ui_tile_rects = {}
         self.ui_spawn_search_text = ''
         self.ui_search_active = False
         self._layout_overlay_ui()
-        # Ensure plugins are loaded early so their tools show up in the spawn UI
+                                                                                
         try:
             pluginload.load_enabled_plugins(self)
         except Exception:
@@ -785,7 +785,7 @@ class ParticleGame:
                 placed = True
         elif self.current_tool == 'blood':
             if hasattr(self, 'blood_system'):
-                # Use spray to feel like a splatter
+                                                   
                 self.blood_system.add_spray(int(game_x), int(game_y), count=max(4, self.brush_size), speed=1.8)
                 placed = True
         elif self.current_tool == 'dirt':
@@ -1276,7 +1276,7 @@ class ParticleGame:
         if hasattr(self, 'dirt_system'):
             self.dirt_system.update(self._frame_index)
         self.blocks_system.update(self._frame_index, npcs=self.npcs)
-        # Apply cross-system collisions before reactions
+                                                        
         if getattr(self, 'collision', None) is not None:
             try:
                 self.collision.apply(self._frame_index)
@@ -1298,7 +1298,7 @@ class ParticleGame:
             from src import reactions as dg_react
             dg_react.apply(self)
         except Exception:
-            # Fallback to legacy local interactions if reactions module fails
+                                                                             
             try:
                 self._handle_cross_material_collisions()
             except Exception:
@@ -1395,7 +1395,7 @@ class ParticleGame:
                     self.blue_lava_system.draw(game_surface)
                 self.toxic_system.draw(game_surface)
                 self.blood_system.draw(game_surface)
-                # AIR overlay removed
+                                     
                 if getattr(self, 'npcs', None):
                     for npc in self.npcs:
                         try:
