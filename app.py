@@ -29,6 +29,7 @@ from src.bg import GridBackground
 from src.menu import MainMenu
 from src.pause import PauseMenu
 from src.settings import load_settings, save_settings
+from src.speed import SpeedController
 from src.pluginman.pluginmain import start_plugin_service, get_service
 from src.pluginman import pluginload
 from src import discord as dg_discord
@@ -67,6 +68,8 @@ class ParticleGame:
         self.clock = pygame.time.Clock()
         self.font = pygame.font.Font(None, 14)
         self.button_font = pygame.font.Font(None, 12)
+        # HUD font for on-screen displays (clearer and larger)
+        self.hud_font = pygame.font.Font(None, 18)
         self.sand_system = SandSystem(self.game_width, height)
         self.water_system = WaterSystem(self.game_width, height)
         self.lava_system = LavaSystem(self.game_width, height)
@@ -241,6 +244,8 @@ class ParticleGame:
         self.blocks_drag_active = False
         self.blocks_drag_start = None
         self.blocks_drag_current = None
+        # Time/speed controller for slow/fast/paused simulation
+        self.speed = SpeedController()
 
     def _get_text_texture(self, text: str, color: Tup[int, int, int]) -> 'Texture':
         key = (text, color)
@@ -572,6 +577,11 @@ class ParticleGame:
                         gx, gy = self.camera.view_to_world(vx, my)
                         self.blocks_drag_current = (int(gx), int(gy))
             elif event.type == pygame.KEYDOWN:
+                # Speed/time controls: LEFT slows, RIGHT speeds up, SPACE resets, P toggles pause
+                try:
+                    self.speed.handle_event(event)
+                except Exception:
+                    pass
                 if event.key == pygame.K_ESCAPE:
                     self.show_pause_menu = True
                     continue
@@ -1470,29 +1480,8 @@ class ParticleGame:
                     self.screen.blit(dim, (0, 0))
                     if hasattr(self, 'pause_menu'):
                         self.pause_menu.draw_cpu(self.screen)
-                now = time.time()
-                if now - self._stats_updated_at > 0.25:
-                    self._stats_updated_at = now
-                    parts = [f'Blocks: {self.blocks_system.get_particle_count()}', f'Metal: {self.metal_system.get_particle_count()}']
-                    if hasattr(self, 'gold_system'):
-                        parts.append(f'Gold: {self.gold_system.get_particle_count()}')
-                    if hasattr(self, 'ruby_system'):
-                        parts.append(f'Ruby: {self.ruby_system.get_particle_count()}')
-                    if hasattr(self, 'dirt_system'):
-                        parts.append(f'Dirt: {self.dirt_system.get_particle_count()}')
-                    parts.extend([f'Sand: {self.sand_system.get_particle_count()}', f'Water: {self.water_system.get_particle_count()}'])
-                    if hasattr(self, 'oil_system'):
-                        parts.append(f'Oil: {self.oil_system.get_particle_count()}')
-                    parts.extend([
-                        f'Lava: {self.lava_system.get_particle_count()}',
-                        f"BlueLava: {self.blue_lava_system.get_particle_count() if hasattr(self, 'blue_lava_system') else 0}",
-                        f'Toxic: {self.toxic_system.get_particle_count()}',
-                        f'Blood: {self.blood_system.get_particle_count()}'
-                    ])
-                    stats = ' | '.join(parts) + f' | FPS: {self.fps}'
-                    self._stats_cache_surf = self.font.render(stats, True, (200, 200, 200))
-                if self._stats_cache_surf:
-                    self.screen.blit(self._stats_cache_surf, (self.sidebar_width + 10, self.height - 25))
+                # Draw compact status panels (FPS and Time speed) at bottom-left
+                self._draw_status_panels_cpu()
                 mouse_x, mouse_y = pygame.mouse.get_pos()
                 if self.sidebar_width <= mouse_x < self.width:
                     color = (200, 100, 100) if self.current_tool == 'sand' else (100, 150, 255)
@@ -1671,37 +1660,8 @@ class ParticleGame:
             self.renderer.fill_rect(sdl2rect.Rect(0, 0, self.width, self.height))
             if hasattr(self, 'pause_menu'):
                 self.pause_menu.draw_gpu(self.renderer)
-        now = time.time()
-        if self._stats_cache_tex is None or now - self._stats_updated_at > 0.25:
-            self._stats_updated_at = now
-            parts = [f'Blocks: {self.blocks_system.get_particle_count()}', f'Metal: {self.metal_system.get_particle_count()}']
-            if hasattr(self, 'gold_system'):
-                parts.append(f'Gold: {self.gold_system.get_particle_count()}')
-            if hasattr(self, 'ruby_system'):
-                parts.append(f'Ruby: {self.ruby_system.get_particle_count()}')
-            if hasattr(self, 'diamond_system'):
-                parts.append(f'Diamond: {self.diamond_system.get_particle_count()}')
-            if hasattr(self, 'dirt_system'):
-                parts.append(f'Dirt: {self.dirt_system.get_particle_count()}')
-            parts.extend([f'Sand: {self.sand_system.get_particle_count()}', f'Water: {self.water_system.get_particle_count()}'])
-            if hasattr(self, 'milk_system'):
-                parts.append(f'Milk: {self.milk_system.get_particle_count()}')
-            if hasattr(self, 'milk_system'):
-                parts.append(f'Milk: {self.milk_system.get_particle_count()}')
-            if hasattr(self, 'oil_system'):
-                parts.append(f'Oil: {self.oil_system.get_particle_count()}')
-            parts.extend([
-                f'Lava: {self.lava_system.get_particle_count()}',
-                f"BlueLava: {self.blue_lava_system.get_particle_count() if hasattr(self, 'blue_lava_system') else 0}",
-                f'Toxic: {self.toxic_system.get_particle_count()}',
-                f'Blood: {self.blood_system.get_particle_count()}'
-            ])
-            stats = ' | '.join(parts) + f' | FPS: {self.fps}'
-            stats_surf = self.font.render(stats, True, (200, 200, 200))
-            self._stats_cache_tex = Texture.from_surface(self.renderer, stats_surf)
-            self._stats_cache_surf = stats_surf
-        if self._stats_cache_tex and self._stats_cache_surf:
-            self.renderer.copy(self._stats_cache_tex, dstrect=sdl2rect.Rect(self.sidebar_width + 10, self.height - 25, self._stats_cache_surf.get_width(), self._stats_cache_surf.get_height()))
+        # Draw compact status panels (FPS and Time speed) at bottom-left (GPU)
+        self._draw_status_panels_gpu()
         mouse_x, mouse_y = pygame.mouse.get_pos()
         if self.sidebar_width <= mouse_x < self.width:
             r = self.brush_size
@@ -1917,6 +1877,53 @@ class ParticleGame:
             self.screen.blit(preview, (x, y))
             pygame.draw.rect(self.screen, (100, 160, 255), pygame.Rect(x, y, w, h), 1)
 
+    def _format_time_label(self) -> str:
+        try:
+            st = self.speed.get_state()
+            scale = float(st.get('scale', 1.0))
+        except Exception:
+            scale = 1.0
+        delta = scale - 1.0
+        sign = '+' if delta >= 0 else '-'
+        return f"X{sign}{abs(delta):.1f} Time"
+
+    def _draw_status_panels_cpu(self):
+        # Only show in sandbox (not in main or pause menus)
+        if getattr(self, 'show_main_menu', False) or getattr(self, 'show_pause_menu', False):
+            return
+        padding = 10
+        gap = 8
+        # Labels and sizes
+        fps_label = f"{int(self.fps)} FPS"
+        time_label = self._format_time_label()
+        fps_surf = self.hud_font.render(fps_label, True, (230, 230, 230))
+        time_surf = self.hud_font.render(time_label, True, (230, 230, 230))
+        panel_h = max(28, self.hud_font.get_height() + 10)
+        fps_w = fps_surf.get_width() + 16
+        time_w = time_surf.get_width() + 16
+        y = padding
+        # Place at top-right: FPS on the far right, Time to its left
+        fps_x = self.width - padding - fps_w
+        time_x = fps_x - gap - time_w
+        # Time Panel
+        time_rect = pygame.Rect(time_x, y, time_w, panel_h)
+        time_bg = pygame.Surface((time_rect.w, time_rect.h), pygame.SRCALPHA)
+        time_bg.fill((0, 0, 0, 180))
+        self.screen.blit(time_bg, time_rect.topleft)
+        pygame.draw.rect(self.screen, (90, 90, 90), time_rect, 1)
+        tx = time_rect.x + (time_rect.w - time_surf.get_width()) // 2
+        ty = time_rect.y + (time_rect.h - time_surf.get_height()) // 2
+        self.screen.blit(time_surf, (tx, ty))
+        # FPS Panel
+        fps_rect = pygame.Rect(fps_x, y, fps_w, panel_h)
+        fps_bg = pygame.Surface((fps_rect.w, fps_rect.h), pygame.SRCALPHA)
+        fps_bg.fill((0, 0, 0, 180))
+        self.screen.blit(fps_bg, fps_rect.topleft)
+        pygame.draw.rect(self.screen, (90, 90, 90), fps_rect, 1)
+        fx = fps_rect.x + (fps_rect.w - fps_surf.get_width()) // 2
+        fy = fps_rect.y + (fps_rect.h - fps_surf.get_height()) // 2
+        self.screen.blit(fps_surf, (fx, fy))
+
     def _draw_overlays_gpu(self):
         self._ensure_ui_textures()
         self.renderer.draw_color = (0, 0, 0, 128)
@@ -2124,6 +2131,49 @@ class ParticleGame:
             self.renderer.draw_color = (100, 160, 255, 255)
             self.renderer.draw_rect(sdl2rect.Rect(x, y, w, h))
 
+    def _draw_status_panels_gpu(self):
+        # Only show in sandbox (not in main or pause menus)
+        if getattr(self, 'show_main_menu', False) or getattr(self, 'show_pause_menu', False):
+            return
+        padding = 10
+        gap = 8
+        y = padding
+        # Labels and sizes
+        fps_label = f"{int(self.fps)} FPS"
+        time_label = self._format_time_label()
+        fps_surf = self.hud_font.render(fps_label, True, (230, 230, 230))
+        time_surf = self.hud_font.render(time_label, True, (230, 230, 230))
+        panel_h = max(28, self.hud_font.get_height() + 10)
+        fps_w = fps_surf.get_width() + 16
+        time_w = time_surf.get_width() + 16
+        # Place at top-right: FPS on the far right, Time to its left
+        fps_x = self.width - padding - fps_w
+        time_x = fps_x - gap - time_w
+        # Time Panel
+        self.renderer.draw_color = (0, 0, 0, 180)
+        self.renderer.fill_rect(sdl2rect.Rect(time_x, y, time_w, panel_h))
+        self.renderer.draw_color = (90, 90, 90, 255)
+        self.renderer.draw_rect(sdl2rect.Rect(time_x, y, time_w, panel_h))
+        try:
+            time_tex = Texture.from_surface(self.renderer, time_surf)
+            txx = time_x + (time_w - time_surf.get_width()) // 2
+            txy = y + (panel_h - time_surf.get_height()) // 2
+            self.renderer.copy(time_tex, dstrect=sdl2rect.Rect(txx, txy, time_surf.get_width(), time_surf.get_height()))
+        except Exception:
+            pass
+        # FPS Panel
+        self.renderer.draw_color = (0, 0, 0, 180)
+        self.renderer.fill_rect(sdl2rect.Rect(fps_x, y, fps_w, panel_h))
+        self.renderer.draw_color = (90, 90, 90, 255)
+        self.renderer.draw_rect(sdl2rect.Rect(fps_x, y, fps_w, panel_h))
+        try:
+            fps_tex = Texture.from_surface(self.renderer, fps_surf)
+            fx = fps_x + (fps_w - fps_surf.get_width()) // 2
+            fy = y + (panel_h - fps_surf.get_height()) // 2
+            self.renderer.copy(fps_tex, dstrect=sdl2rect.Rect(fx, fy, fps_surf.get_width(), fps_surf.get_height()))
+        except Exception:
+            pass
+
     def run(self):
         running = True
         while running:
@@ -2157,15 +2207,25 @@ class ParticleGame:
                     self.screen = pygame.display.set_mode((self.width, self.height), pygame.SCALED | pygame.DOUBLEBUF)
                     pygame.display.set_caption('Dustground')
                 self.ready = True
-            self.update()
-            self.draw()
+            # Decide how many simulation steps to run this frame based on speed control
+            try:
+                steps = int(self.speed.steps_for_frame())
+            except Exception:
+                steps = 1
+            if steps <= 0:
+                # Paused or slowed below 1 step this frame: render without advancing simulation
+                self.draw()
+            else:
+                for _ in range(steps):
+                    self.update()
+                    self._frame_index += 1
+                self.draw()
             self.clock.tick(self.target_fps)
             self.fps = int(self.clock.get_fps())
             if self._fps_avg <= 0:
                 self._fps_avg = float(self.fps)
             else:
                 self._fps_avg = self._fps_avg * 0.9 + self.fps * 0.1
-            self._frame_index += 1
 
 def main():
     game = ParticleGame()

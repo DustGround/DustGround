@@ -45,7 +45,7 @@ class MainMenu:
         self.accent_fill = (55, 70, 95)
         self.accent_outline = (100, 130, 170)
         self._text_cache = {}
-        self.about_lines: List[str] = ['Dust Grounds by Impnet Studios', 'barrier', 'Lead Developer: qrunk', 'barrier', 'Secondary Developer 1: SoupUnit', 'barrier', 'Secondary Developer 2: nehiyawe', 'barrier', 'Special Thanks to:', 'People Playground and Studio Minus for the art style inspiration.']
+        self.about_lines: List[str] = ['Dust Grounds (0.2) by Studio Carousel', 'barrier', 'Lead Developer: qrunk', 'barrier', 'Secondary Developer 1: SoupUnit', 'barrier', 'Secondary Developer 2: nehiyawe', 'barrier', 'Special Thanks to:', 'People Playground and Studio Minus for the art style inspiration.']
         self.settings_tabs = [
             {
                 'name': 'general',
