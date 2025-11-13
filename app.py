@@ -117,8 +117,12 @@ class ParticleGame:
             start_plugin_service(Path.cwd())
         except Exception:
             pass
+        # Initialize Discord RPC based on user settings
         try:
-            dg_discord.init()
+            if bool(self.user_settings.get('discord_rpc', True)):
+                dg_discord.init()
+            else:
+                dg_discord.shutdown()
         except Exception:
             pass
         self.current_tool = 'sand'
@@ -254,6 +258,15 @@ class ParticleGame:
         self.max_particles = int(s.get('max_particles', self.max_particles))
         self.show_grid = bool(s.get('show_grid', True))
         self.invert_zoom = bool(s.get('invert_zoom', False))
+        # Discord RPC toggle
+        self.discord_rpc_enabled = bool(s.get('discord_rpc', True))
+        try:
+            if self.discord_rpc_enabled:
+                dg_discord.init()
+            else:
+                dg_discord.shutdown()
+        except Exception:
+            pass
         vol = int(s.get('master_volume', 100))
         try:
             if not pygame.mixer.get_init():
@@ -1187,17 +1200,18 @@ class ParticleGame:
 
     def update(self):
         try:
-            if getattr(self, 'show_main_menu', False):
-                dg_discord.update_for_menu()
-            else:
-                pc = 0
-                try:
-                    svc = get_service()
-                    if svc is not None:
-                        pc = sum((1 for p in svc.get_plugins() if getattr(p, 'enabled', False)))
-                except Exception:
+            if getattr(self, 'discord_rpc_enabled', True):
+                if getattr(self, 'show_main_menu', False):
+                    dg_discord.update_for_menu()
+                else:
                     pc = 0
-                dg_discord.update_for_sandbox(pc)
+                    try:
+                        svc = get_service()
+                        if svc is not None:
+                            pc = sum((1 for p in svc.get_plugins() if getattr(p, 'enabled', False)))
+                    except Exception:
+                        pc = 0
+                    dg_discord.update_for_sandbox(pc)
         except Exception:
             pass
         if getattr(self, 'show_main_menu', False):

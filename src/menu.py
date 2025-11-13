@@ -46,8 +46,29 @@ class MainMenu:
         self.accent_outline = (100, 130, 170)
         self._text_cache = {}
         self.about_lines: List[str] = ['Dust Grounds by Impnet Studios', 'barrier', 'Lead Developer: qrunk', 'barrier', 'Secondary Developer 1: SoupUnit', 'barrier', 'Secondary Developer 2: nehiyawe', 'barrier', 'Special Thanks to:', 'People Playground and Studio Minus for the art style inspiration.']
-        self.settings_tabs = [{'name': 'general', 'items': [{'key': 'renderer', 'label': 'Renderer', 'type': 'choice', 'choices': ['Auto', 'CPU', 'GPU'], 'value': 0}, {'key': 'show_grid', 'label': 'Grid Background', 'type': 'toggle', 'value': True}, {'key': 'target_fps', 'label': 'Target FPS', 'type': 'choice', 'choices': ['30', '60', '120'], 'value': 1}]}, {'name': 'controls', 'items': [{'key': 'max_particles', 'label': 'Max Particles', 'type': 'choice', 'choices': ['25k', '50k', '100k'], 'value': 1}]}, {'name': 'user interface', 'items': [{'key': 'invert_zoom', 'label': 'Invert Zoom', 'type': 'toggle', 'value': False}]}, {'name': 'audio', 'items': [{'key': 'master_volume', 'label': 'Master Volume', 'type': 'slider', 'min': 0, 'max': 100, 'step': 25, 'value': 100}]}]
-        self.setting_desc = {'renderer': 'Pick the rendering backend. Auto picks GPU when available for best performance.', 'show_grid': 'Toggle the world-aligned grid in the background.', 'target_fps': 'Desired frames per second for the simulation and rendering.', 'max_particles': 'Upper bound for total particle count to cap performance.', 'invert_zoom': 'Invert the zoom direction when scrolling.', 'master_volume': 'Overall audio volume for all sounds.'}
+        self.settings_tabs = [
+            {
+                'name': 'general',
+                'items': [
+                    {'key': 'renderer', 'label': 'Renderer', 'type': 'choice', 'choices': ['Auto', 'CPU', 'GPU'], 'value': 0},
+                    {'key': 'show_grid', 'label': 'Grid Background', 'type': 'toggle', 'value': True},
+                    {'key': 'target_fps', 'label': 'Target FPS', 'type': 'choice', 'choices': ['30', '60', '120'], 'value': 1},
+                    {'key': 'discord_rpc', 'label': 'Discord Rich Presence', 'type': 'toggle', 'value': True},
+                ],
+            },
+            {'name': 'controls', 'items': [{'key': 'max_particles', 'label': 'Max Particles', 'type': 'choice', 'choices': ['25k', '50k', '100k'], 'value': 1}]},
+            {'name': 'user interface', 'items': [{'key': 'invert_zoom', 'label': 'Invert Zoom', 'type': 'toggle', 'value': False}]},
+            {'name': 'audio', 'items': [{'key': 'master_volume', 'label': 'Master Volume', 'type': 'slider', 'min': 0, 'max': 100, 'step': 25, 'value': 100}]},
+        ]
+        self.setting_desc = {
+            'renderer': 'Pick the rendering backend. Auto picks GPU when available for best performance.',
+            'show_grid': 'Toggle the world-aligned grid in the background.',
+            'target_fps': 'Desired frames per second for the simulation and rendering.',
+            'max_particles': 'Upper bound for total particle count to cap performance.',
+            'invert_zoom': 'Invert the zoom direction when scrolling.',
+            'master_volume': 'Overall audio volume for all sounds.',
+            'discord_rpc': 'Enable Discord Rich Presence integration (shows your status in Discord).',
+        }
         self.options_has_back_tab = True
         self.opt_tab_idx = 0
         self.opt_item_idx = 0

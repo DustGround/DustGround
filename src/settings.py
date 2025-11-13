@@ -10,7 +10,15 @@ def _settings_path() -> str:
     return os.path.join(_project_root(), SETTINGS_FILENAME)
 
 def default_settings() -> Dict[str, Any]:
-    return {'renderer': 'Auto', 'show_grid': True, 'target_fps': 60, 'max_particles': 50000, 'invert_zoom': False, 'master_volume': 100}
+    return {
+        'renderer': 'Auto',
+        'show_grid': True,
+        'target_fps': 60,
+        'max_particles': 50000,
+        'invert_zoom': False,
+        'master_volume': 100,
+        'discord_rpc': True,
+    }
 essential_keys = set(default_settings().keys())
 
 def load_settings() -> Dict[str, Any]:
