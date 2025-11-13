@@ -143,6 +143,15 @@ class SandSystem:
     def draw(self, surface: pygame.Surface):
         for particle in self.particles:
             if 0 <= particle.x < self.width and 0 <= particle.y < self.height:
+                                                                                       
+                img = getattr(particle, 'image', None)
+                if img is not None:
+                    try:
+                        w, h = img.get_size()
+                        surface.blit(img, (int(particle.x) - w // 2, int(particle.y) - h // 2))
+                        continue
+                    except Exception:
+                        pass
                 color = (194, 178, 128) if not particle.wet else (180, 160, 100)
                 pygame.draw.circle(surface, color, (int(particle.x), int(particle.y)), 1)
 

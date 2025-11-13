@@ -9,23 +9,31 @@ from typing import Tuple, Dict, List, Tuple as Tup
 from src.sand import SandSystem, SandParticle
 from src.water import WaterSystem, WaterParticle
 from src.lava import LavaSystem, LavaParticle
+from src.bluelava import BlueLavaSystem, BlueLavaParticle
 from src.toxic import ToxicSystem
 from src.oil import OilSystem
 from src.metal import MetalSystem
+from src.gold import GoldSystem
+from src.ruby import RubySystem
+from src.diamond import DiamondSystem
+from src.milk import MilkSystem
+from src.dirt import DirtSystem
 from src.blocks import BlocksSystem
 from src.blood import BloodSystem
 from src.npc import NPC
 from src.opt import get_or_create_optimizations
 from src.scaling import recommend_settings
 from src.zoom import Camera
-from src.admin import clear_everything, clear_living
+from src.admin import clear_everything, clear_living, clear_blocks
 from src.bg import GridBackground
 from src.menu import MainMenu
 from src.pause import PauseMenu
 from src.settings import load_settings, save_settings
+from src.speed import SpeedController
 from src.pluginman.pluginmain import start_plugin_service, get_service
 from src.pluginman import pluginload
 from src import discord as dg_discord
+from src.col import CollisionManager, default_register_all
 from src import sound as sfx
 GPU_AVAILABLE = False
 try:
@@ -60,12 +68,20 @@ class ParticleGame:
         self.clock = pygame.time.Clock()
         self.font = pygame.font.Font(None, 14)
         self.button_font = pygame.font.Font(None, 12)
+        # HUD font for on-screen displays (clearer and larger)
+        self.hud_font = pygame.font.Font(None, 18)
         self.sand_system = SandSystem(self.game_width, height)
         self.water_system = WaterSystem(self.game_width, height)
         self.lava_system = LavaSystem(self.game_width, height)
+        self.blue_lava_system = BlueLavaSystem(self.game_width, height)
         self.toxic_system = ToxicSystem(self.game_width, height)
         self.oil_system = OilSystem(self.game_width, height)
         self.metal_system = MetalSystem(self.game_width, height)
+        self.gold_system = GoldSystem(self.game_width, height)
+        self.ruby_system = RubySystem(self.game_width, height)
+        self.diamond_system = DiamondSystem(self.game_width, height)
+        self.milk_system = MilkSystem(self.game_width, height)
+        self.dirt_system = DirtSystem(self.game_width, height)
         self.blood_system = BloodSystem(self.game_width, height)
         self.blocks_system = BlocksSystem(self.game_width, height)
 
@@ -73,12 +89,27 @@ class ParticleGame:
             return self.metal_system.is_solid(x, y) or self.blocks_system.is_solid(x, y)
         self._is_solid_obstacle = _is_solid_obstacle
         self.sand_system.set_obstacle_query(self._is_solid_obstacle)
+        self.dirt_system.set_obstacle_query(self._is_solid_obstacle)
         self.water_system.set_obstacle_query(self._is_solid_obstacle)
         self.lava_system.set_obstacle_query(self._is_solid_obstacle)
+        self.blue_lava_system.set_obstacle_query(self._is_solid_obstacle)
         self.toxic_system.set_obstacle_query(self._is_solid_obstacle)
         self.oil_system.set_obstacle_query(self._is_solid_obstacle)
         self.blood_system.set_obstacle_query(self._is_solid_obstacle)
+        if hasattr(self, 'milk_system'):
+            self.milk_system.set_obstacle_query(self._is_solid_obstacle)
+        if hasattr(self, 'ruby_system'):
+            self.ruby_system.set_obstacle_query(self._is_solid_obstacle)
+        if hasattr(self, 'diamond_system'):
+            self.diamond_system.set_obstacle_query(self._is_solid_obstacle)
+        if hasattr(self, 'gold_system'):
+            self.gold_system.set_obstacle_query(self._is_solid_obstacle)
         self.blocks_system.set_external_obstacle(self.metal_system.is_solid)
+                                                                                   
+        try:
+            self.collision = default_register_all(self)
+        except Exception:
+            self.collision = None
         self.camera = Camera(world_w=self.game_width, world_h=self.height, view_w=self.game_width, view_h=self.height)
         self.grid_bg = GridBackground()
         self.show_main_menu = True
@@ -93,8 +124,12 @@ class ParticleGame:
             start_plugin_service(Path.cwd())
         except Exception:
             pass
+        # Initialize Discord RPC based on user settings
         try:
-            dg_discord.init()
+            if bool(self.user_settings.get('discord_rpc', True)):
+                dg_discord.init()
+            else:
+                dg_discord.shutdown()
         except Exception:
             pass
         self.current_tool = 'sand'
@@ -105,7 +140,7 @@ class ParticleGame:
         self.ui_show_admin = False
         self.ui_icon_size = 56
         self.ui_menu_size = (460, 340)
-        self.ui_admin_menu_size = (300, 160)
+        self.ui_admin_menu_size = (300, 220)
         self.ui_header_h = 36
         self.ui_grid_cols = 4
         self.ui_flask_surf = self._load_image('src/assets/flask.png')
@@ -140,6 +175,14 @@ class ParticleGame:
         if not self.ui_metal_surf:
             self.ui_metal_surf = pygame.Surface((64, 64), pygame.SRCALPHA)
             self.ui_metal_surf.fill((140, 140, 150, 255))
+        self.ui_dirt_surf = self._load_image('src/assets/dirt.png')
+        if not self.ui_dirt_surf:
+            self.ui_dirt_surf = pygame.Surface((64, 64), pygame.SRCALPHA)
+            self.ui_dirt_surf.fill((130, 100, 70, 255))
+        self.ui_milk_surf = self._load_image('src/assets/milk.png')
+        if not self.ui_milk_surf:
+            self.ui_milk_surf = pygame.Surface((64,64), pygame.SRCALPHA)
+            self.ui_milk_surf.fill((240,240,245,255))
         self.ui_blocks_surf = self._load_image('src/assets/blocks.png')
         if not self.ui_blocks_surf:
             self.ui_blocks_surf = pygame.Surface((64, 64), pygame.SRCALPHA)
@@ -148,15 +191,42 @@ class ParticleGame:
         self._ui_water_tex = None
         self._ui_sand_tex = None
         self._ui_lava_tex = None
+        self._ui_blue_lava_tex = None
         self._ui_npc_tex = None
         self._ui_toxic_tex = None
         self._ui_oil_tex = None
         self._ui_metal_tex = None
+        self._ui_dirt_tex = None
         self._ui_blocks_tex = None
+                                                         
         self._ui_admin_tex = None
-        self.ui_tiles = [{'key': 'blocks', 'label': 'BLOCKS', 'color': (180, 180, 190), 'surf': self.ui_blocks_surf}, {'key': 'sand', 'label': 'SAND', 'color': (200, 180, 120), 'surf': self.ui_sand_surf}, {'key': 'water', 'label': 'WATER', 'color': (80, 140, 255), 'surf': self.ui_water_surf}, {'key': 'oil', 'label': 'OIL', 'color': (60, 50, 30), 'surf': self.ui_oil_surf}, {'key': 'lava', 'label': 'LAVA', 'color': (255, 120, 60), 'surf': self.ui_lava_surf}, {'key': 'metal', 'label': 'METAL', 'color': (140, 140, 150), 'surf': self.ui_metal_surf}, {'key': 'toxic', 'label': 'TOXIC', 'color': (90, 220, 90), 'surf': self.ui_toxic_surf}, {'key': 'npc', 'label': 'NPC', 'color': (180, 180, 200), 'surf': self.ui_npc_surf}]
+        self.ui_tiles = [
+            {'key': 'blocks', 'label': 'BLOCKS', 'color': (180, 180, 190), 'surf': self.ui_blocks_surf},
+            {'key': 'sand', 'label': 'SAND', 'color': (200, 180, 120), 'surf': self.ui_sand_surf},
+            {'key': 'dirt', 'label': 'DIRT', 'color': (130, 100, 70), 'surf': self.ui_dirt_surf},
+            {'key': 'water', 'label': 'WATER', 'color': (80, 140, 255), 'surf': self.ui_water_surf},
+            {'key': 'oil', 'label': 'OIL', 'color': (60, 50, 30), 'surf': self.ui_oil_surf},
+            {'key': 'lava', 'label': 'LAVA', 'color': (255, 120, 60), 'surf': self.ui_lava_surf},
+            {'key': 'bluelava', 'label': 'BLUE LAVA', 'color': (70, 170, 255), 'surf': self._load_image('src/assets/bluelava.png') or self.ui_lava_surf},
+            {'key': 'metal', 'label': 'METAL', 'color': (140, 140, 150), 'surf': self.ui_metal_surf},
+            {'key': 'gold', 'label': 'GOLD', 'color': (250, 215, 60), 'surf': self._load_image('src/assets/gold.png') or self.ui_metal_surf},
+            {'key': 'ruby', 'label': 'RUBY', 'color': (180, 20, 30), 'surf': self._load_image('src/assets/ruby.png') or self.ui_metal_surf},
+            {'key': 'diamond', 'label': 'DIAMOND', 'color': (185, 220, 255), 'surf': self._load_image('src/assets/diamond.png') or self.ui_metal_surf},
+            {'key': 'toxic', 'label': 'TOXIC', 'color': (90, 220, 90), 'surf': self.ui_toxic_surf},
+            {'key': 'milk', 'label': 'MILK', 'color': (240, 240, 245), 'surf': self.ui_milk_surf},
+            {'key': 'blood', 'label': 'BLOOD', 'color': (170, 20, 30), 'surf': self._load_image('src/assets/blood.png') or self.ui_oil_surf},
+            {'key': 'npc', 'label': 'NPC', 'color': (180, 180, 200), 'surf': self.ui_npc_surf}
+        ]
+                                   
         self.ui_tile_rects = {}
+        self.ui_spawn_search_text = ''
+        self.ui_search_active = False
         self._layout_overlay_ui()
+                                                                                
+        try:
+            pluginload.load_enabled_plugins(self)
+        except Exception:
+            pass
         self.fps = 0
         self._stats_cache_tex = None
         self._stats_cache_surf = None
@@ -174,6 +244,8 @@ class ParticleGame:
         self.blocks_drag_active = False
         self.blocks_drag_start = None
         self.blocks_drag_current = None
+        # Time/speed controller for slow/fast/paused simulation
+        self.speed = SpeedController()
 
     def _get_text_texture(self, text: str, color: Tup[int, int, int]) -> 'Texture':
         key = (text, color)
@@ -196,6 +268,15 @@ class ParticleGame:
         self.max_particles = int(s.get('max_particles', self.max_particles))
         self.show_grid = bool(s.get('show_grid', True))
         self.invert_zoom = bool(s.get('invert_zoom', False))
+        # Discord RPC toggle
+        self.discord_rpc_enabled = bool(s.get('discord_rpc', True))
+        try:
+            if self.discord_rpc_enabled:
+                dg_discord.init()
+            else:
+                dg_discord.shutdown()
+        except Exception:
+            pass
         vol = int(s.get('master_volume', 100))
         try:
             if not pygame.mixer.get_init():
@@ -247,6 +328,20 @@ class ParticleGame:
         except Exception:
             return None
 
+    def _get_filtered_tiles(self):
+        q = getattr(self, 'ui_spawn_search_text', '') or ''
+        tiles = list(getattr(self, 'ui_tiles', []))
+        if not q:
+            return tiles
+        ql = q.lower()
+        out = []
+        for t in tiles:
+            key = str(t.get('key', ''))
+            label = str(t.get('label', ''))
+            if ql in key.lower() or ql in label.lower():
+                out.append(t)
+        return out
+
     def _layout_overlay_ui(self):
         self.ui_flask_rect = pygame.Rect(10, 10, self.ui_icon_size, self.ui_icon_size)
         self.ui_admin_rect = pygame.Rect(self.ui_flask_rect.right + 8, 10, self.ui_icon_size, self.ui_icon_size)
@@ -258,10 +353,13 @@ class ParticleGame:
         gap = 10
         header_h = getattr(self, 'ui_header_h', 36)
         area_x = self.ui_menu_rect.x + gpad
-        area_y = self.ui_menu_rect.y + header_h + gpad
+        search_h = 26
+        spad = 4
+        self.ui_search_rect = pygame.Rect(area_x, self.ui_menu_rect.y + header_h + spad, mw - 2 * gpad, search_h)
+        area_y = self.ui_search_rect.bottom + gpad
         area_w = mw - 2 * gpad
-        area_h = mh - header_h - 2 * gpad - 20
-        tiles = getattr(self, 'ui_tiles', [])
+        area_h = mh - header_h - 2 * gpad - 20 - (search_h + spad)
+        tiles = self._get_filtered_tiles()
         n = len(tiles)
         min_tile_w = 48
         max_tile_w = 72
@@ -273,7 +371,7 @@ class ParticleGame:
         tile_w = max(min_tile_w, min(max_tile_w, tile_w_avail))
         tile_h = max(48, min(72, tile_h_avail))
         self.ui_tile_rects = {}
-        for idx, tile in enumerate(getattr(self, 'ui_tiles', [])):
+        for idx, tile in enumerate(tiles):
             r = idx // cols
             c = idx % cols
             x = area_x + c * (tile_w + gap)
@@ -335,6 +433,8 @@ class ParticleGame:
                         self.ui_show_spawn = not self.ui_show_spawn
                         if self.ui_show_spawn:
                             setattr(self, 'ui_show_admin', False)
+                            self._layout_overlay_ui()
+                            self.ui_search_active = False
                         continue
                     if hasattr(self, 'ui_admin_rect') and self.ui_admin_rect.collidepoint(mx, my):
                         self.ui_show_admin = not getattr(self, 'ui_show_admin', False)
@@ -342,10 +442,14 @@ class ParticleGame:
                             self.ui_show_spawn = False
                         continue
                     if self.ui_show_spawn and self.ui_menu_rect.collidepoint(mx, my):
-                        for key, rect in getattr(self, 'ui_tile_rects', {}).items():
-                            if rect.collidepoint(mx, my):
-                                self.current_tool = key
-                                break
+                        if hasattr(self, 'ui_search_rect') and self.ui_search_rect.collidepoint(mx, my):
+                            self.ui_search_active = True
+                        else:
+                            self.ui_search_active = False
+                            for key, rect in getattr(self, 'ui_tile_rects', {}).items():
+                                if rect.collidepoint(mx, my):
+                                    self.current_tool = key
+                                    break
                         continue
                     if getattr(self, 'ui_show_admin', False) and hasattr(self, 'ui_admin_menu_rect') and self.ui_admin_menu_rect.collidepoint(mx, my):
                         if hasattr(self, 'ui_admin_clear_rect') and self.ui_admin_clear_rect and self.ui_admin_clear_rect.collidepoint(mx, my):
@@ -356,6 +460,14 @@ class ParticleGame:
                                     self.sand_system.clear()
                                     self.water_system.clear()
                                     self.lava_system.clear()
+                                    if hasattr(self, 'blue_lava_system'):
+                                        self.blue_lava_system.clear()
+                                    if hasattr(self, 'ruby_system'):
+                                        self.ruby_system.clear()
+                                    if hasattr(self, 'diamond_system'):
+                                        self.diamond_system.clear()
+                                    if hasattr(self, 'gold_system'):
+                                        self.gold_system.clear()
                                     self.toxic_system.clear()
                                     if hasattr(self, 'oil_system'):
                                         self.oil_system.clear()
@@ -380,6 +492,16 @@ class ParticleGame:
                                     self.npc_drag_index = None
                                     if hasattr(self, 'npc'):
                                         self.npc = None
+                                except Exception:
+                                    pass
+                            continue
+                        if hasattr(self, 'ui_admin_clear_blocks_rect') and self.ui_admin_clear_blocks_rect and self.ui_admin_clear_blocks_rect.collidepoint(mx, my):
+                            try:
+                                clear_blocks(self)
+                            except Exception:
+                                try:
+                                    if hasattr(self, 'blocks_system'):
+                                        self.blocks_system.clear()
                                 except Exception:
                                     pass
                             continue
@@ -455,9 +577,28 @@ class ParticleGame:
                         gx, gy = self.camera.view_to_world(vx, my)
                         self.blocks_drag_current = (int(gx), int(gy))
             elif event.type == pygame.KEYDOWN:
+                # Speed/time controls: LEFT slows, RIGHT speeds up, SPACE resets, P toggles pause
+                try:
+                    self.speed.handle_event(event)
+                except Exception:
+                    pass
                 if event.key == pygame.K_ESCAPE:
                     self.show_pause_menu = True
                     continue
+                if self.ui_show_spawn and getattr(self, 'ui_search_active', False):
+                    if event.key == pygame.K_BACKSPACE:
+                        if self.ui_spawn_search_text:
+                            self.ui_spawn_search_text = self.ui_spawn_search_text[:-1]
+                            self._layout_overlay_ui()
+                        continue
+                    elif event.key == pygame.K_RETURN:
+                        continue
+                    else:
+                        ch = getattr(event, 'unicode', '')
+                        if ch and ch.isprintable() and not ch.isspace() or ch == ' ':
+                            self.ui_spawn_search_text = (self.ui_spawn_search_text or '') + ch
+                            self._layout_overlay_ui()
+                            continue
                 mods = pygame.key.get_mods()
                 if mods & pygame.KMOD_CTRL:
                     mx, my = pygame.mouse.get_pos()
@@ -488,12 +629,39 @@ class ParticleGame:
         elif self.buttons.get('lava') and self.buttons['lava'].collidepoint(pos):
             self.current_tool = 'lava'
             return True
+        elif self.buttons.get('bluelava') and self.buttons['bluelava'].collidepoint(pos):
+            self.current_tool = 'bluelava'
+            return True
         elif self.buttons.get('npc') and self.buttons['npc'].collidepoint(pos):
             self.current_tool = 'npc'
             return True
         elif self.buttons['clear'].collidepoint(pos):
             self.sand_system.clear()
             self.water_system.clear()
+            if hasattr(self, 'dirt_system'):
+                self.dirt_system.clear()
+            if hasattr(self, 'milk_system'):
+                self.milk_system.clear()
+            if hasattr(self, 'blood_system'):
+                self.blood_system.clear()
+            if hasattr(self, 'lava_system'):
+                self.lava_system.clear()
+            if hasattr(self, 'blue_lava_system'):
+                self.blue_lava_system.clear()
+            if hasattr(self, 'ruby_system'):
+                self.ruby_system.clear()
+            if hasattr(self, 'diamond_system'):
+                self.diamond_system.clear()
+            if hasattr(self, 'gold_system'):
+                self.gold_system.clear()
+            if hasattr(self, 'toxic_system'):
+                self.toxic_system.clear()
+            if hasattr(self, 'oil_system'):
+                self.oil_system.clear()
+            if hasattr(self, 'blood_system'):
+                self.blood_system.clear()
+            if hasattr(self, 'metal_system'):
+                self.metal_system.clear()
             self.npcs.clear()
             self.active_npc = None
             self.npc_drag_index = None
@@ -508,7 +676,14 @@ class ParticleGame:
         bw = max(100, self.sidebar_width - margin * 2)
         bh = 40
         y = 20
-        self.buttons = {'sand': pygame.Rect(margin, y, bw, bh), 'water': pygame.Rect(margin, y + 50, bw, bh), 'lava': pygame.Rect(margin, y + 100, bw, bh), 'npc': pygame.Rect(margin, y + 150, bw, bh), 'clear': pygame.Rect(margin, y + 200, bw, bh)}
+        self.buttons = {
+            'sand': pygame.Rect(margin, y, bw, bh),
+            'water': pygame.Rect(margin, y + 50, bw, bh),
+            'lava': pygame.Rect(margin, y + 100, bw, bh),
+            'bluelava': pygame.Rect(margin, y + 150, bw, bh),
+            'npc': pygame.Rect(margin, y + 200, bw, bh),
+            'clear': pygame.Rect(margin, y + 250, bw, bh)
+        }
 
     def _apply_resize(self, new_w: int, new_h: int):
         self.width = int(max(400, new_w))
@@ -517,10 +692,28 @@ class ParticleGame:
         self.game_width = self.width
         self.sand_system.width = self.game_width
         self.sand_system.height = self.height
+        if hasattr(self, 'dirt_system'):
+            self.dirt_system.width = self.game_width
+            self.dirt_system.height = self.height
         self.water_system.width = self.game_width
         self.water_system.height = self.height
+        if hasattr(self, 'milk_system'):
+            self.milk_system.width = self.game_width
+            self.milk_system.height = self.height
         self.lava_system.width = self.game_width
         self.lava_system.height = self.height
+        if hasattr(self, 'blue_lava_system'):
+            self.blue_lava_system.width = self.game_width
+            self.blue_lava_system.height = self.height
+        if hasattr(self, 'ruby_system'):
+            self.ruby_system.width = self.game_width
+            self.ruby_system.height = self.height
+        if hasattr(self, 'diamond_system'):
+            self.diamond_system.width = self.game_width
+            self.diamond_system.height = self.height
+        if hasattr(self, 'gold_system'):
+            self.gold_system.width = self.game_width
+            self.gold_system.height = self.height
         if hasattr(self, 'toxic_system'):
             self.toxic_system.width = self.game_width
             self.toxic_system.height = self.height
@@ -576,7 +769,16 @@ class ParticleGame:
             return
         view_x = mouse_x - self.sidebar_width
         game_x, game_y = self.camera.view_to_world(view_x, mouse_y)
-        total = self.sand_system.get_particle_count() + self.water_system.get_particle_count() + self.oil_system.get_particle_count() + self.lava_system.get_particle_count() + self.toxic_system.get_particle_count() + self.metal_system.get_particle_count() + self.blood_system.get_particle_count()
+        total = (self.sand_system.get_particle_count() +
+                  self.water_system.get_particle_count() +
+                  (self.milk_system.get_particle_count() if hasattr(self, 'milk_system') else 0) +
+                  (self.oil_system.get_particle_count() if hasattr(self, 'oil_system') else 0) +
+                  self.lava_system.get_particle_count() +
+                  (self.blue_lava_system.get_particle_count() if hasattr(self, 'blue_lava_system') else 0) +
+                  self.toxic_system.get_particle_count() +
+                  self.metal_system.get_particle_count() +
+                  self.blood_system.get_particle_count() +
+                  (self.dirt_system.get_particle_count() if hasattr(self, 'dirt_system') else 0))
         if total >= self.max_particles:
             if self.current_tool != 'npc':
                 return
@@ -593,12 +795,46 @@ class ParticleGame:
         elif self.current_tool == 'lava':
             self.lava_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
             placed = True
+        elif self.current_tool == 'bluelava':
+            if hasattr(self, 'blue_lava_system'):
+                self.blue_lava_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
+                placed = True
+        elif self.current_tool == 'ruby':
+            if hasattr(self, 'ruby_system'):
+                self.ruby_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
+                placed = True
+        elif self.current_tool == 'diamond':
+            if hasattr(self, 'diamond_system'):
+                self.diamond_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
+                placed = True
+        elif self.current_tool == 'gold':
+            if hasattr(self, 'gold_system'):
+                self.gold_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
+                placed = True
         elif self.current_tool == 'metal':
             self.metal_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
             placed = True
         elif self.current_tool == 'toxic':
             self.toxic_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
             placed = True
+        elif self.current_tool == 'milk':
+            if hasattr(self, 'milk_system'):
+                for _ in range(self.brush_size * 2):
+                    self.milk_system.add_particle(int(game_x), int(game_y))
+                placed = True
+        elif self.current_tool == 'blood':
+            if hasattr(self, 'blood_system'):
+                                                   
+                self.blood_system.add_spray(int(game_x), int(game_y), count=max(4, self.brush_size), speed=1.8)
+                placed = True
+        elif self.current_tool == 'dirt':
+            if hasattr(self, 'dirt_system'):
+                self.dirt_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
+                placed = True
+        elif self.current_tool == 'dirt':
+            if hasattr(self, 'dirt_system'):
+                self.dirt_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
+                placed = True
         elif self.current_tool == 'npc':
             if self.active_npc is not None and self.npc_drag_index is not None:
                 try:
@@ -726,6 +962,21 @@ class ParticleGame:
                     nearby.extend(self.water_system.grid[cell])
         return nearby
 
+    def _get_nearby_blood(self, x: float, y: float, radius: int=2) -> list:
+        if not hasattr(self, 'blood_system'):
+            return []
+        cs = getattr(self.blood_system, 'cell_size', 3)
+        cell_x, cell_y = (int(x // cs), int(y // cs))
+        out = []
+        for dx in range(-radius, radius + 1):
+            for dy in range(-radius, radius + 1):
+                cx = cell_x + dx
+                cy = cell_y + dy
+                for p in getattr(self.blood_system, 'particles', []):
+                    if int(p.x // cs) == cx and int(p.y // cs) == cy:
+                        out.append(p)
+        return out
+
     def _get_nearby_lava(self, x: float, y: float, radius: int=2) -> list:
         cell_x, cell_y = (int(x // self.lava_system.cell_size), int(y // self.lava_system.cell_size))
         nearby = []
@@ -734,6 +985,62 @@ class ParticleGame:
                 cell = (cell_x + dx, cell_y + dy)
                 if cell in self.lava_system.grid:
                     nearby.extend(self.lava_system.grid[cell])
+        return nearby
+
+    def _get_nearby_bluelava(self, x: float, y: float, radius: int=2) -> list:
+        if not hasattr(self, 'blue_lava_system'):
+            return []
+        cs = self.blue_lava_system.cell_size
+        cell_x, cell_y = (int(x // cs), int(y // cs))
+        nearby = []
+        grid = self.blue_lava_system.grid
+        for dx in range(-radius, radius + 1):
+            for dy in range(-radius, radius + 1):
+                cell = (cell_x + dx, cell_y + dy)
+                if cell in grid:
+                    nearby.extend(grid[cell])
+        return nearby
+
+    def _get_nearby_ruby(self, x: float, y: float, radius: int=2) -> list:
+        if not hasattr(self, 'ruby_system'):
+            return []
+        cs = getattr(self.ruby_system, 'cell_size', 3)
+        cell_x, cell_y = (int(x // cs), int(y // cs))
+        nearby = []
+        grid = getattr(self.ruby_system, 'grid', {})
+        for dx in range(-radius, radius + 1):
+            for dy in range(-radius, radius + 1):
+                cell = (cell_x + dx, cell_y + dy)
+                if cell in grid:
+                    nearby.extend(grid[cell])
+        return nearby
+
+    def _get_nearby_diamond(self, x: float, y: float, radius: int=2) -> list:
+        if not hasattr(self, 'diamond_system'):
+            return []
+        cs = getattr(self.diamond_system, 'cell_size', 3)
+        cell_x, cell_y = (int(x // cs), int(y // cs))
+        nearby = []
+        grid = getattr(self.diamond_system, 'grid', {})
+        for dx in range(-radius, radius + 1):
+            for dy in range(-radius, radius + 1):
+                cell = (cell_x + dx, cell_y + dy)
+                if cell in grid:
+                    nearby.extend(grid[cell])
+        return nearby
+
+    def _get_nearby_gold(self, x: float, y: float, radius: int=2) -> list:
+        if not hasattr(self, 'gold_system'):
+            return []
+        cs = getattr(self.gold_system, 'cell_size', 3)
+        cell_x, cell_y = (int(x // cs), int(y // cs))
+        nearby = []
+        grid = getattr(self.gold_system, 'grid', {})
+        for dx in range(-radius, radius + 1):
+            for dy in range(-radius, radius + 1):
+                cell = (cell_x + dx, cell_y + dy)
+                if cell in grid:
+                    nearby.extend(grid[cell])
         return nearby
 
     def _get_nearby_toxic(self, x: float, y: float, radius: int=2) -> list:
@@ -754,6 +1061,30 @@ class ParticleGame:
                 cell = (cell_x + dx, cell_y + dy)
                 if cell in self.oil_system.grid:
                     nearby.extend(self.oil_system.grid[cell])
+        return nearby
+
+    def _get_nearby_milk(self, x: float, y: float, radius: int=2) -> list:
+        if not hasattr(self, 'milk_system'):
+            return []
+        cell_x, cell_y = (int(x // self.milk_system.cell_size), int(y // self.milk_system.cell_size))
+        nearby = []
+        for dx in range(-radius, radius + 1):
+            for dy in range(-radius, radius + 1):
+                cell = (cell_x + dx, cell_y + dy)
+                if cell in self.milk_system.grid:
+                    nearby.extend(self.milk_system.grid[cell])
+        return nearby
+
+    def _get_nearby_dirt(self, x: float, y: float, radius: int=2) -> list:
+        if not hasattr(self, 'dirt_system'):
+            return []
+        cell_x, cell_y = (int(x // self.dirt_system.cell_size), int(y // self.dirt_system.cell_size))
+        nearby = []
+        for dx in range(-radius, radius + 1):
+            for dy in range(-radius, radius + 1):
+                cell = (cell_x + dx, cell_y + dy)
+                if cell in self.dirt_system.grid:
+                    nearby.extend(self.dirt_system.grid[cell])
         return nearby
 
     def _find_nearest_npc(self, x: float, y: float, max_dist: float=40.0):
@@ -909,17 +1240,18 @@ class ParticleGame:
 
     def update(self):
         try:
-            if getattr(self, 'show_main_menu', False):
-                dg_discord.update_for_menu()
-            else:
-                pc = 0
-                try:
-                    svc = get_service()
-                    if svc is not None:
-                        pc = sum((1 for p in svc.get_plugins() if getattr(p, 'enabled', False)))
-                except Exception:
+            if getattr(self, 'discord_rpc_enabled', True):
+                if getattr(self, 'show_main_menu', False):
+                    dg_discord.update_for_menu()
+                else:
                     pc = 0
-                dg_discord.update_for_sandbox(pc)
+                    try:
+                        svc = get_service()
+                        if svc is not None:
+                            pc = sum((1 for p in svc.get_plugins() if getattr(p, 'enabled', False)))
+                    except Exception:
+                        pc = 0
+                    dg_discord.update_for_sandbox(pc)
         except Exception:
             pass
         if getattr(self, 'show_main_menu', False):
@@ -953,7 +1285,10 @@ class ParticleGame:
                     p.prev[1] = gy
                 except Exception:
                     pass
-        total = self.sand_system.get_particle_count() + self.water_system.get_particle_count() + self.lava_system.get_particle_count() + self.toxic_system.get_particle_count() + self.blood_system.get_particle_count()
+        total = (self.sand_system.get_particle_count() + self.water_system.get_particle_count() +
+                 self.lava_system.get_particle_count() +
+                 (self.blue_lava_system.get_particle_count() if hasattr(self, 'blue_lava_system') else 0) +
+                 self.toxic_system.get_particle_count() + self.blood_system.get_particle_count())
         if self._frame_index - self._last_scale_apply >= 15:
             settings = recommend_settings(total, self._fps_avg or self.fps, self.target_fps, self.use_gpu)
             s = settings['sand']
@@ -977,17 +1312,37 @@ class ParticleGame:
             self._last_scale_apply = self._frame_index
         self.sand_system.update(self._frame_index)
         self.water_system.update(self._frame_index)
+        if hasattr(self, 'milk_system'):
+            self.milk_system.update()
         if hasattr(self, 'oil_system'):
             self.oil_system.update(self._frame_index)
         self.lava_system.update(self._frame_index)
+        if hasattr(self, 'blue_lava_system'):
+            self.blue_lava_system.update(self._frame_index)
         self.toxic_system.update(self._frame_index)
         self.metal_system.update(self._frame_index)
-        self.blocks_system.update(self._frame_index)
+        if hasattr(self, 'ruby_system'):
+            self.ruby_system.update(self._frame_index)
+        if hasattr(self, 'diamond_system'):
+            self.diamond_system.update(self._frame_index)
+        if hasattr(self, 'gold_system'):
+            self.gold_system.update(self._frame_index)
+        if hasattr(self, 'blood_system'):
+            self.blood_system.update(self._frame_index)
+        if hasattr(self, 'dirt_system'):
+            self.dirt_system.update(self._frame_index)
+        self.blocks_system.update(self._frame_index, npcs=self.npcs)
+                                                        
+        if getattr(self, 'collision', None) is not None:
+            try:
+                self.collision.apply(self._frame_index)
+            except Exception:
+                pass
         dt = 1.0 / max(self.target_fps, 1)
         if self.npcs:
             for npc in list(self.npcs):
                 try:
-                    npc.update(dt, bounds=(self.game_width, self.height))
+                    npc.update(dt, bounds=(self.game_width, self.height), solid_query=self._is_solid_obstacle)
                 except Exception:
                     try:
                         self.npcs.remove(npc)
@@ -995,7 +1350,15 @@ class ParticleGame:
                         pass
         if self.npcs:
             self._npc_particle_coupling()
-        self._handle_cross_material_collisions()
+        try:
+            from src import reactions as dg_react
+            dg_react.apply(self)
+        except Exception:
+                                                                             
+            try:
+                self._handle_cross_material_collisions()
+            except Exception:
+                pass
         self._handle_npc_hazards()
 
     def draw_sidebar(self):
@@ -1071,13 +1434,26 @@ class ParticleGame:
                     self.grid_bg.draw_cpu(game_surface, self.camera)
                 self.blocks_system.draw(game_surface)
                 self.metal_system.draw(game_surface)
+                if hasattr(self, 'gold_system'):
+                    self.gold_system.draw(game_surface)
+                if hasattr(self, 'ruby_system'):
+                    self.ruby_system.draw(game_surface)
+                if hasattr(self, 'diamond_system'):
+                    self.diamond_system.draw(game_surface)
+                if hasattr(self, 'dirt_system'):
+                    self.dirt_system.draw(game_surface)
                 self.sand_system.draw(game_surface)
                 self.water_system.draw(game_surface)
+                if hasattr(self, 'milk_system'):
+                    self.milk_system.draw(game_surface)
                 if hasattr(self, 'oil_system'):
                     self.oil_system.draw(game_surface)
                 self.lava_system.draw(game_surface)
+                if hasattr(self, 'blue_lava_system'):
+                    self.blue_lava_system.draw(game_surface)
                 self.toxic_system.draw(game_surface)
                 self.blood_system.draw(game_surface)
+                                     
                 if getattr(self, 'npcs', None):
                     for npc in self.npcs:
                         try:
@@ -1104,17 +1480,8 @@ class ParticleGame:
                     self.screen.blit(dim, (0, 0))
                     if hasattr(self, 'pause_menu'):
                         self.pause_menu.draw_cpu(self.screen)
-                now = time.time()
-                if now - self._stats_updated_at > 0.25:
-                    self._stats_updated_at = now
-                    parts = [f'Blocks: {self.blocks_system.get_particle_count()}', f'Metal: {self.metal_system.get_particle_count()}', f'Sand: {self.sand_system.get_particle_count()}', f'Water: {self.water_system.get_particle_count()}']
-                    if hasattr(self, 'oil_system'):
-                        parts.append(f'Oil: {self.oil_system.get_particle_count()}')
-                    parts.extend([f'Lava: {self.lava_system.get_particle_count()}', f'Toxic: {self.toxic_system.get_particle_count()}', f'Blood: {self.blood_system.get_particle_count()}'])
-                    stats = ' | '.join(parts) + f' | FPS: {self.fps}'
-                    self._stats_cache_surf = self.font.render(stats, True, (200, 200, 200))
-                if self._stats_cache_surf:
-                    self.screen.blit(self._stats_cache_surf, (self.sidebar_width + 10, self.height - 25))
+                # Draw compact status panels (FPS and Time speed) at bottom-left
+                self._draw_status_panels_cpu()
                 mouse_x, mouse_y = pygame.mouse.get_pos()
                 if self.sidebar_width <= mouse_x < self.width:
                     color = (200, 100, 100) if self.current_tool == 'sand' else (100, 150, 255)
@@ -1141,11 +1508,21 @@ class ParticleGame:
                 self.grid_bg.draw_cpu(cpu_layer, self.camera)
             self.blocks_system.draw(cpu_layer)
             self.metal_system.draw(cpu_layer)
+            if hasattr(self, 'gold_system'):
+                self.gold_system.draw(cpu_layer)
+            if hasattr(self, 'ruby_system'):
+                self.ruby_system.draw(cpu_layer)
+            if hasattr(self, 'diamond_system'):
+                self.diamond_system.draw(cpu_layer)
+            if hasattr(self, 'dirt_system'):
+                self.dirt_system.draw(cpu_layer)
             self.sand_system.draw(cpu_layer)
             self.water_system.draw(cpu_layer)
             if hasattr(self, 'oil_system'):
                 self.oil_system.draw(cpu_layer)
             self.lava_system.draw(cpu_layer)
+            if hasattr(self, 'blue_lava_system'):
+                self.blue_lava_system.draw(cpu_layer)
             self.toxic_system.draw(cpu_layer)
             self.blood_system.draw(cpu_layer)
             if self.npc is not None:
@@ -1162,6 +1539,18 @@ class ParticleGame:
             tex = Texture.from_surface(self.renderer, scaled)
             self.renderer.copy(tex, dstrect=sdl2rect.Rect(self.sidebar_width, 0, self.game_width, self.height))
         else:
+            if hasattr(self, 'dirt_system'):
+                try:
+                    dirt_groups = self.dirt_system.get_point_groups()
+                    if hasattr(dirt_groups, 'items'):
+                        for color, pts in dirt_groups.items():
+                            if not pts:
+                                continue
+                            pts_offset = [(x + self.sidebar_width, y) for x, y in pts]
+                            self.renderer.draw_color = (color[0], color[1], color[2], 255)
+                            self.renderer.draw_points(pts_offset)
+                except Exception:
+                    pass
             sand_groups = self.sand_system.get_point_groups()
             for color, pts in sand_groups.items():
                 if not pts:
@@ -1174,6 +1563,42 @@ class ParticleGame:
                 m_pts_offset = [(x + self.sidebar_width, y) for x, y in m_points]
                 self.renderer.draw_color = (m_color[0], m_color[1], m_color[2], 255)
                 self.renderer.draw_points(m_pts_offset)
+            if hasattr(self, 'gold_system'):
+                try:
+                    g_color, g_points = self.gold_system.get_point_groups()
+                    if g_points:
+                        g_pts_offset = [(x + self.sidebar_width, y) for x, y in g_points]
+                        self.renderer.draw_color = (g_color[0], g_color[1], g_color[2], 255)
+                        self.renderer.draw_points(g_pts_offset)
+                except Exception:
+                    pass
+            if hasattr(self, 'ruby_system'):
+                try:
+                    r_color, r_points = self.ruby_system.get_point_groups()
+                    if r_points:
+                        r_pts_offset = [(x + self.sidebar_width, y) for x, y in r_points]
+                        self.renderer.draw_color = (r_color[0], r_color[1], r_color[2], 255)
+                        self.renderer.draw_points(r_pts_offset)
+                except Exception:
+                    pass
+            if hasattr(self, 'diamond_system'):
+                try:
+                    d_color, d_points = self.diamond_system.get_point_groups()
+                    if d_points:
+                        d_pts_offset = [(x + self.sidebar_width, y) for x, y in d_points]
+                        self.renderer.draw_color = (d_color[0], d_color[1], d_color[2], 255)
+                        self.renderer.draw_points(d_pts_offset)
+                except Exception:
+                    pass
+            if hasattr(self, 'ruby_system'):
+                try:
+                    r_color, r_points = self.ruby_system.get_point_groups()
+                    if r_points:
+                        r_pts_offset = [(x + self.sidebar_width, y) for x, y in r_points]
+                        self.renderer.draw_color = (r_color[0], r_color[1], r_color[2], 255)
+                        self.renderer.draw_points(r_pts_offset)
+                except Exception:
+                    pass
             bl_color, bl_points = self.blocks_system.get_point_groups()
             if bl_points:
                 bl_pts_offset = [(x + self.sidebar_width, y) for x, y in bl_points]
@@ -1200,6 +1625,12 @@ class ParticleGame:
                 self.renderer.draw_color = (w_color[0], w_color[1], w_color[2], 255)
                 self.renderer.draw_points(w_pts_offset)
             l_color, l_points = self.lava_system.get_point_groups()
+            if hasattr(self, 'blue_lava_system'):
+                bl_col, bl_pts = self.blue_lava_system.get_point_groups()
+                if bl_pts:
+                    bl_pts_offset = [(x + self.sidebar_width, y) for x, y in bl_pts]
+                    self.renderer.draw_color = (bl_col[0], bl_col[1], bl_col[2], 255)
+                    self.renderer.draw_points(bl_pts_offset)
             if l_points:
                 l_pts_offset = [(x + self.sidebar_width, y) for x, y in l_points]
                 self.renderer.draw_color = (l_color[0], l_color[1], l_color[2], 255)
@@ -1229,19 +1660,8 @@ class ParticleGame:
             self.renderer.fill_rect(sdl2rect.Rect(0, 0, self.width, self.height))
             if hasattr(self, 'pause_menu'):
                 self.pause_menu.draw_gpu(self.renderer)
-        now = time.time()
-        if self._stats_cache_tex is None or now - self._stats_updated_at > 0.25:
-            self._stats_updated_at = now
-            parts = [f'Blocks: {self.blocks_system.get_particle_count()}', f'Metal: {self.metal_system.get_particle_count()}', f'Sand: {self.sand_system.get_particle_count()}', f'Water: {self.water_system.get_particle_count()}']
-            if hasattr(self, 'oil_system'):
-                parts.append(f'Oil: {self.oil_system.get_particle_count()}')
-            parts.extend([f'Lava: {self.lava_system.get_particle_count()}', f'Toxic: {self.toxic_system.get_particle_count()}', f'Blood: {self.blood_system.get_particle_count()}'])
-            stats = ' | '.join(parts) + f' | FPS: {self.fps}'
-            stats_surf = self.font.render(stats, True, (200, 200, 200))
-            self._stats_cache_tex = Texture.from_surface(self.renderer, stats_surf)
-            self._stats_cache_surf = stats_surf
-        if self._stats_cache_tex and self._stats_cache_surf:
-            self.renderer.copy(self._stats_cache_tex, dstrect=sdl2rect.Rect(self.sidebar_width + 10, self.height - 25, self._stats_cache_surf.get_width(), self._stats_cache_surf.get_height()))
+        # Draw compact status panels (FPS and Time speed) at bottom-left (GPU)
+        self._draw_status_panels_gpu()
         mouse_x, mouse_y = pygame.mouse.get_pos()
         if self.sidebar_width <= mouse_x < self.width:
             r = self.brush_size
@@ -1345,6 +1765,21 @@ class ParticleGame:
             title_text = self.button_font.render('SPAWN', True, (220, 220, 220))
             ty = self.ui_menu_rect.y + (header_h - title_text.get_height()) // 2
             self.screen.blit(title_text, (self.ui_menu_rect.x + 12, ty))
+            if hasattr(self, 'ui_search_rect'):
+                sr = self.ui_search_rect
+                pygame.draw.rect(self.screen, (30, 30, 30), sr, border_radius=6)
+                pygame.draw.rect(self.screen, (70, 70, 70), sr, width=1, border_radius=6)
+                q = self.ui_spawn_search_text or ''
+                placeholder = 'Search'
+                show_text = q if q else placeholder
+                color = (220, 220, 220) if q else (150, 150, 150)
+                ts = self.button_font.render(show_text, True, color)
+                self.screen.blit(ts, (sr.x + 8, sr.y + (sr.h - ts.get_height()) // 2))
+                if self.ui_search_active:
+                    cx = sr.x + 8 + ts.get_width()
+                    cy0 = sr.y + 5
+                    cy1 = sr.y + sr.h - 5
+                    pygame.draw.line(self.screen, (200, 200, 200), (cx, cy0), (cx, cy1), 1)
             mx, my = pygame.mouse.get_pos()
             for tile in getattr(self, 'ui_tiles', []):
                 rect = self.ui_tile_rects.get(tile['key']) if hasattr(self, 'ui_tile_rects') else None
@@ -1418,6 +1853,16 @@ class ParticleGame:
             lrx2 = self.ui_admin_clear_npcs_rect.x + (self.ui_admin_clear_npcs_rect.w - label2.get_width()) // 2
             lry2 = self.ui_admin_clear_npcs_rect.y + (self.ui_admin_clear_npcs_rect.h - label2.get_height()) // 2
             self.screen.blit(label2, (lrx2, lry2))
+            btn_y3 = btn_y2 + btn_h + 12
+            self.ui_admin_clear_blocks_rect = pygame.Rect(btn_x, btn_y3, btn_w, btn_h)
+            hovered3 = self.ui_admin_clear_blocks_rect.collidepoint(pygame.mouse.get_pos())
+            pygame.draw.rect(self.screen, (30, 30, 30), self.ui_admin_clear_blocks_rect, border_radius=8)
+            if hovered3:
+                pygame.draw.rect(self.screen, (60, 60, 60), self.ui_admin_clear_blocks_rect, 0, border_radius=8)
+            label3 = self.button_font.render('CLEAR ALL BLOCKS', True, (220, 220, 220))
+            lrx3 = self.ui_admin_clear_blocks_rect.x + (self.ui_admin_clear_blocks_rect.w - label3.get_width()) // 2
+            lry3 = self.ui_admin_clear_blocks_rect.y + (self.ui_admin_clear_blocks_rect.h - label3.get_height()) // 2
+            self.screen.blit(label3, (lrx3, lry3))
         if self.current_tool == 'blocks' and self.blocks_drag_active and self.blocks_drag_start and self.blocks_drag_current:
             sx, sy = self.blocks_drag_start
             cx, cy = self.blocks_drag_current
@@ -1431,6 +1876,53 @@ class ParticleGame:
             preview.fill((100, 150, 255, 50))
             self.screen.blit(preview, (x, y))
             pygame.draw.rect(self.screen, (100, 160, 255), pygame.Rect(x, y, w, h), 1)
+
+    def _format_time_label(self) -> str:
+        try:
+            st = self.speed.get_state()
+            scale = float(st.get('scale', 1.0))
+        except Exception:
+            scale = 1.0
+        delta = scale - 1.0
+        sign = '+' if delta >= 0 else '-'
+        return f"X{sign}{abs(delta):.1f} Time"
+
+    def _draw_status_panels_cpu(self):
+        # Only show in sandbox (not in main or pause menus)
+        if getattr(self, 'show_main_menu', False) or getattr(self, 'show_pause_menu', False):
+            return
+        padding = 10
+        gap = 8
+        # Labels and sizes
+        fps_label = f"{int(self.fps)} FPS"
+        time_label = self._format_time_label()
+        fps_surf = self.hud_font.render(fps_label, True, (230, 230, 230))
+        time_surf = self.hud_font.render(time_label, True, (230, 230, 230))
+        panel_h = max(28, self.hud_font.get_height() + 10)
+        fps_w = fps_surf.get_width() + 16
+        time_w = time_surf.get_width() + 16
+        y = padding
+        # Place at top-right: FPS on the far right, Time to its left
+        fps_x = self.width - padding - fps_w
+        time_x = fps_x - gap - time_w
+        # Time Panel
+        time_rect = pygame.Rect(time_x, y, time_w, panel_h)
+        time_bg = pygame.Surface((time_rect.w, time_rect.h), pygame.SRCALPHA)
+        time_bg.fill((0, 0, 0, 180))
+        self.screen.blit(time_bg, time_rect.topleft)
+        pygame.draw.rect(self.screen, (90, 90, 90), time_rect, 1)
+        tx = time_rect.x + (time_rect.w - time_surf.get_width()) // 2
+        ty = time_rect.y + (time_rect.h - time_surf.get_height()) // 2
+        self.screen.blit(time_surf, (tx, ty))
+        # FPS Panel
+        fps_rect = pygame.Rect(fps_x, y, fps_w, panel_h)
+        fps_bg = pygame.Surface((fps_rect.w, fps_rect.h), pygame.SRCALPHA)
+        fps_bg.fill((0, 0, 0, 180))
+        self.screen.blit(fps_bg, fps_rect.topleft)
+        pygame.draw.rect(self.screen, (90, 90, 90), fps_rect, 1)
+        fx = fps_rect.x + (fps_rect.w - fps_surf.get_width()) // 2
+        fy = fps_rect.y + (fps_rect.h - fps_surf.get_height()) // 2
+        self.screen.blit(fps_surf, (fx, fy))
 
     def _draw_overlays_gpu(self):
         self._ensure_ui_textures()
@@ -1504,6 +1996,25 @@ class ParticleGame:
             title_surf = self.button_font.render(title, True, (220, 220, 220))
             ty = self.ui_menu_rect.y + (header_h - title_surf.get_height()) // 2
             self.renderer.copy(title_tex, dstrect=sdl2rect.Rect(self.ui_menu_rect.x + 12, ty, title_surf.get_width(), title_surf.get_height()))
+            if hasattr(self, 'ui_search_rect'):
+                sr = self.ui_search_rect
+                self.renderer.draw_color = (30, 30, 30, 255)
+                self.renderer.fill_rect(sdl2rect.Rect(sr.x, sr.y, sr.w, sr.h))
+                self.renderer.draw_color = (70, 70, 70, 255)
+                self.renderer.draw_rect(sdl2rect.Rect(sr.x, sr.y, sr.w, sr.h))
+                q = self.ui_spawn_search_text or ''
+                placeholder = 'Search'
+                show_text = q if q else placeholder
+                color = (220, 220, 220) if q else (150, 150, 150)
+                ts = self.button_font.render(show_text, True, color)
+                tex = self._get_text_texture(show_text, color)
+                tx = sr.x + 8
+                ty2 = sr.y + (sr.h - ts.get_height()) // 2
+                self.renderer.copy(tex, dstrect=sdl2rect.Rect(tx, ty2, ts.get_width(), ts.get_height()))
+                if self.ui_search_active:
+                    cx = tx + ts.get_width()
+                    self.renderer.draw_color = (200, 200, 200, 255)
+                    self.renderer.draw_line((cx, sr.y + 5), (cx, sr.y + sr.h - 5))
             mx, my = pygame.mouse.get_pos()
             for tile in getattr(self, 'ui_tiles', []):
                 rect = self.ui_tile_rects.get(tile['key']) if hasattr(self, 'ui_tile_rects') else None
@@ -1598,6 +2109,16 @@ class ParticleGame:
             lrx2 = btn_x + (btn_w - lbl2_surf.get_width()) // 2
             lry2 = btn_y2 + (btn_h - lbl2_surf.get_height()) // 2
             self.renderer.copy(lbl2_tex, dstrect=sdl2rect.Rect(lrx2, lry2, lbl2_surf.get_width(), lbl2_surf.get_height()))
+            btn_y3 = btn_y2 + btn_h + 12
+            self.ui_admin_clear_blocks_rect = pygame.Rect(btn_x, btn_y3, btn_w, btn_h)
+            self.renderer.draw_color = (30, 30, 30, 255)
+            self.renderer.fill_rect(sdl2rect.Rect(btn_x, btn_y3, btn_w, btn_h))
+            lbl3 = 'CLEAR ALL BLOCKS'
+            lbl3_surf = self.button_font.render(lbl3, True, (220, 220, 220))
+            lbl3_tex = self._get_text_texture(lbl3, (220, 220, 220))
+            lrx3 = btn_x + (btn_w - lbl3_surf.get_width()) // 2
+            lry3 = btn_y3 + (btn_h - lbl3_surf.get_height()) // 2
+            self.renderer.copy(lbl3_tex, dstrect=sdl2rect.Rect(lrx3, lry3, lbl3_surf.get_width(), lbl3_surf.get_height()))
         if self.current_tool == 'blocks' and self.blocks_drag_active and self.blocks_drag_start and self.blocks_drag_current:
             sx, sy = self.blocks_drag_start
             cx, cy = self.blocks_drag_current
@@ -1609,6 +2130,49 @@ class ParticleGame:
             h = abs(v2y - v1y)
             self.renderer.draw_color = (100, 160, 255, 255)
             self.renderer.draw_rect(sdl2rect.Rect(x, y, w, h))
+
+    def _draw_status_panels_gpu(self):
+        # Only show in sandbox (not in main or pause menus)
+        if getattr(self, 'show_main_menu', False) or getattr(self, 'show_pause_menu', False):
+            return
+        padding = 10
+        gap = 8
+        y = padding
+        # Labels and sizes
+        fps_label = f"{int(self.fps)} FPS"
+        time_label = self._format_time_label()
+        fps_surf = self.hud_font.render(fps_label, True, (230, 230, 230))
+        time_surf = self.hud_font.render(time_label, True, (230, 230, 230))
+        panel_h = max(28, self.hud_font.get_height() + 10)
+        fps_w = fps_surf.get_width() + 16
+        time_w = time_surf.get_width() + 16
+        # Place at top-right: FPS on the far right, Time to its left
+        fps_x = self.width - padding - fps_w
+        time_x = fps_x - gap - time_w
+        # Time Panel
+        self.renderer.draw_color = (0, 0, 0, 180)
+        self.renderer.fill_rect(sdl2rect.Rect(time_x, y, time_w, panel_h))
+        self.renderer.draw_color = (90, 90, 90, 255)
+        self.renderer.draw_rect(sdl2rect.Rect(time_x, y, time_w, panel_h))
+        try:
+            time_tex = Texture.from_surface(self.renderer, time_surf)
+            txx = time_x + (time_w - time_surf.get_width()) // 2
+            txy = y + (panel_h - time_surf.get_height()) // 2
+            self.renderer.copy(time_tex, dstrect=sdl2rect.Rect(txx, txy, time_surf.get_width(), time_surf.get_height()))
+        except Exception:
+            pass
+        # FPS Panel
+        self.renderer.draw_color = (0, 0, 0, 180)
+        self.renderer.fill_rect(sdl2rect.Rect(fps_x, y, fps_w, panel_h))
+        self.renderer.draw_color = (90, 90, 90, 255)
+        self.renderer.draw_rect(sdl2rect.Rect(fps_x, y, fps_w, panel_h))
+        try:
+            fps_tex = Texture.from_surface(self.renderer, fps_surf)
+            fx = fps_x + (fps_w - fps_surf.get_width()) // 2
+            fy = y + (panel_h - fps_surf.get_height()) // 2
+            self.renderer.copy(fps_tex, dstrect=sdl2rect.Rect(fx, fy, fps_surf.get_width(), fps_surf.get_height()))
+        except Exception:
+            pass
 
     def run(self):
         running = True
@@ -1643,15 +2207,25 @@ class ParticleGame:
                     self.screen = pygame.display.set_mode((self.width, self.height), pygame.SCALED | pygame.DOUBLEBUF)
                     pygame.display.set_caption('Dustground')
                 self.ready = True
-            self.update()
-            self.draw()
+            # Decide how many simulation steps to run this frame based on speed control
+            try:
+                steps = int(self.speed.steps_for_frame())
+            except Exception:
+                steps = 1
+            if steps <= 0:
+                # Paused or slowed below 1 step this frame: render without advancing simulation
+                self.draw()
+            else:
+                for _ in range(steps):
+                    self.update()
+                    self._frame_index += 1
+                self.draw()
             self.clock.tick(self.target_fps)
             self.fps = int(self.clock.get_fps())
             if self._fps_avg <= 0:
                 self._fps_avg = float(self.fps)
             else:
                 self._fps_avg = self._fps_avg * 0.9 + self.fps * 0.1
-            self._frame_index += 1
 
 def main():
     game = ParticleGame()

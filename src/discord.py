@@ -5,7 +5,7 @@ try:
     from pypresence import Presence
 except Exception:
     Presence = None
-DISCORD_CLIENT_ID = 'YOURCLIENTIDGOESINHERE' # what you think i wanna share my client id with you.
+DISCORD_CLIENT_ID = '1433222673508470925'
 
 class _DiscordRPC:
 

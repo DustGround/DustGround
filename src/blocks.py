@@ -1,5 +1,8 @@
 import pygame
-from typing import List, Tuple, Dict
+from typing import TYPE_CHECKING, Iterable, List, Optional, Tuple
+
+if TYPE_CHECKING:
+    from src.npc import NPC
 
 class Block:
 
@@ -184,7 +187,7 @@ class BlocksSystem:
             if not any_resolved:
                 break
 
-    def update(self, frame_index: int=0):
+    def update(self, frame_index: int=0, npcs: Optional[Iterable['NPC']] = None):
         for b in self.blocks:
             b.px = b.x
             b.py = b.y
@@ -197,6 +200,8 @@ class BlocksSystem:
             b.y += b.vy
             self._collide_bounds(b)
         self._collide_blocks()
+        if npcs:
+            self._collide_npcs(npcs)
         for b in self.blocks:
             if b.grounded:
                 if abs(b.vy) < 0.05:
@@ -207,6 +212,94 @@ class BlocksSystem:
         for b in self.blocks:
             self._collide_external(b)
         self._rebuild_occupancy()
+
+    def _collide_npcs(self, npcs: Iterable['NPC']):
+        for b in self.blocks:
+            rect = b.rect
+            for npc in npcs:
+                if not getattr(npc, 'particles', None):
+                    continue
+                body_rects = self._npc_body_rects(npc)
+                prev_rect = pygame.Rect(int(b.px), int(b.py), int(b.w), int(b.h))
+                for body_rect, idx in body_rects:
+                    if not rect.colliderect(body_rect):
+                        continue
+                    resolved = False
+                                                                                         
+                    if prev_rect.bottom <= body_rect.top and b.vy >= 0:
+                        b.y = float(body_rect.top - b.h)
+                        b.vy = 0.0
+                        b.grounded = True
+                        b.vx *= 1 - min(1.0, self.friction * 4)
+                        resolved = True
+                    elif prev_rect.top >= body_rect.bottom and b.vy <= 0:
+                        b.y = float(body_rect.bottom)
+                        b.vy = 0.0
+                        resolved = True
+                    else:
+                                                                  
+                        overlap_left = rect.right - body_rect.left
+                        overlap_right = body_rect.right - rect.left
+                        overlap_top = rect.bottom - body_rect.top
+                        overlap_bottom = body_rect.bottom - rect.top
+                        sep_x = overlap_left if overlap_left < overlap_right else -overlap_right
+                        sep_y = overlap_top if overlap_top < overlap_bottom else -overlap_bottom
+                        if abs(sep_y) <= abs(sep_x):
+                            if sep_y > 0:
+                                b.y -= sep_y
+                            else:
+                                b.y -= sep_y
+                            b.vy = 0.0
+                            if sep_y > 0:
+                                b.grounded = True
+                            resolved = True
+                        else:
+                            if sep_x > 0:
+                                b.x -= sep_x
+                                if b.vx > 0:
+                                    b.vx *= -self.bounce
+                            else:
+                                b.x -= sep_x
+                                if b.vx < 0:
+                                    b.vx *= -self.bounce
+                            resolved = True
+                    if resolved:
+                        rect = b.rect
+                        prev_rect = pygame.Rect(int(b.px), int(b.py), int(b.w), int(b.h))
+                                                                              
+                        if abs(b.vx) < 0.02:
+                            b.vx = 0.0
+                                                                                             
+                        break
+                else:
+                    continue
+                break
+
+    def _npc_body_rects(self, npc: 'NPC') -> List[Tuple[pygame.Rect, int]]:
+        rects: List[Tuple[pygame.Rect, int]] = []
+        base = max(6, int(getattr(npc, 'size', 12)))
+        head_size = int(getattr(npc, 'head_size', 28))
+        for idx, part in enumerate(getattr(npc, 'particles', [])):
+            cx = int(part.pos.x)
+            cy = int(part.pos.y)
+            if idx == 0:
+                rect = pygame.Rect(0, 0, head_size, head_size)
+                rect.center = (cx, cy)
+                rects.append((rect, idx))
+                continue
+            if idx in (1, 2, 3, 4):
+                w = int(base * 1.4)
+                h = int(base * 1.8)
+            elif idx in (5, 6):
+                w = int(base * 1.2)
+                h = int(base * 1.2)
+            else:
+                w = int(base * 1.3)
+                h = int(base * 1.3)
+            rect = pygame.Rect(0, 0, max(6, w), max(6, h))
+            rect.center = (cx, cy)
+            rects.append((rect, idx))
+        return rects
 
     def draw(self, surf: pygame.Surface):
         col = self.color

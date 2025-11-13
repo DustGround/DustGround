@@ -5,12 +5,12 @@ from pathlib import Path
 
 try:
     import pygame
-except Exception:  # pragma: no cover
-    pygame = None  # type: ignore
+except Exception:                    
+    pygame = None                
 
 _place_sound = None
 _last_play = 0.0
-_cooldown = 0.05  # seconds between plays to avoid spam
+_cooldown = 0.05                                       
 
 
 def _ensure_mixer():
