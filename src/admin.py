@@ -28,12 +28,24 @@ def _try_clear_system(sys_obj: Any):
 def clear_everything(game: Any) -> None:
     for name in (
         'sand_system', 'water_system', 'oil_system', 'lava_system', 'blue_lava_system', 'toxic_system',
-        'metal_system', 'blood_system', 'blocks_system', 'dirt_system', 'milk_system'
+        'metal_system', 'gold_system', 'ruby_system', 'diamond_system',
+        'blood_system', 'blocks_system', 'dirt_system', 'milk_system'
     ):
         sys_obj = getattr(game, name, None)
         _try_clear_system(sys_obj)
+    # Clear NPCs and related state
+    if hasattr(game, 'npcs'):
+        try:
+            game.npcs.clear()
+        except Exception:
+            try:
+                game.npcs = []
+            except Exception:
+                pass
     if hasattr(game, 'npc'):
         game.npc = None
+    if hasattr(game, 'active_npc'):
+        game.active_npc = None
     if hasattr(game, 'npc_drag_index'):
         game.npc_drag_index = None
     if hasattr(game, 'blocks_drag_active'):

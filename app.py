@@ -13,6 +13,7 @@ from src.bluelava import BlueLavaSystem, BlueLavaParticle
 from src.toxic import ToxicSystem
 from src.oil import OilSystem
 from src.metal import MetalSystem
+from src.gold import GoldSystem
 from src.ruby import RubySystem
 from src.diamond import DiamondSystem
 from src.milk import MilkSystem
@@ -73,6 +74,7 @@ class ParticleGame:
         self.toxic_system = ToxicSystem(self.game_width, height)
         self.oil_system = OilSystem(self.game_width, height)
         self.metal_system = MetalSystem(self.game_width, height)
+        self.gold_system = GoldSystem(self.game_width, height)
         self.ruby_system = RubySystem(self.game_width, height)
         self.diamond_system = DiamondSystem(self.game_width, height)
         self.milk_system = MilkSystem(self.game_width, height)
@@ -97,6 +99,8 @@ class ParticleGame:
             self.ruby_system.set_obstacle_query(self._is_solid_obstacle)
         if hasattr(self, 'diamond_system'):
             self.diamond_system.set_obstacle_query(self._is_solid_obstacle)
+        if hasattr(self, 'gold_system'):
+            self.gold_system.set_obstacle_query(self._is_solid_obstacle)
         self.blocks_system.set_external_obstacle(self.metal_system.is_solid)
                                                                                    
         try:
@@ -202,6 +206,7 @@ class ParticleGame:
             {'key': 'lava', 'label': 'LAVA', 'color': (255, 120, 60), 'surf': self.ui_lava_surf},
             {'key': 'bluelava', 'label': 'BLUE LAVA', 'color': (70, 170, 255), 'surf': self._load_image('src/assets/bluelava.png') or self.ui_lava_surf},
             {'key': 'metal', 'label': 'METAL', 'color': (140, 140, 150), 'surf': self.ui_metal_surf},
+            {'key': 'gold', 'label': 'GOLD', 'color': (250, 215, 60), 'surf': self._load_image('src/assets/gold.png') or self.ui_metal_surf},
             {'key': 'ruby', 'label': 'RUBY', 'color': (180, 20, 30), 'surf': self._load_image('src/assets/ruby.png') or self.ui_metal_surf},
             {'key': 'diamond', 'label': 'DIAMOND', 'color': (185, 220, 255), 'surf': self._load_image('src/assets/diamond.png') or self.ui_metal_surf},
             {'key': 'toxic', 'label': 'TOXIC', 'color': (90, 220, 90), 'surf': self.ui_toxic_surf},
@@ -456,6 +461,8 @@ class ParticleGame:
                                         self.ruby_system.clear()
                                     if hasattr(self, 'diamond_system'):
                                         self.diamond_system.clear()
+                                    if hasattr(self, 'gold_system'):
+                                        self.gold_system.clear()
                                     self.toxic_system.clear()
                                     if hasattr(self, 'oil_system'):
                                         self.oil_system.clear()
@@ -635,6 +642,8 @@ class ParticleGame:
                 self.ruby_system.clear()
             if hasattr(self, 'diamond_system'):
                 self.diamond_system.clear()
+            if hasattr(self, 'gold_system'):
+                self.gold_system.clear()
             if hasattr(self, 'toxic_system'):
                 self.toxic_system.clear()
             if hasattr(self, 'oil_system'):
@@ -692,6 +701,9 @@ class ParticleGame:
         if hasattr(self, 'diamond_system'):
             self.diamond_system.width = self.game_width
             self.diamond_system.height = self.height
+        if hasattr(self, 'gold_system'):
+            self.gold_system.width = self.game_width
+            self.gold_system.height = self.height
         if hasattr(self, 'toxic_system'):
             self.toxic_system.width = self.game_width
             self.toxic_system.height = self.height
@@ -784,6 +796,10 @@ class ParticleGame:
         elif self.current_tool == 'diamond':
             if hasattr(self, 'diamond_system'):
                 self.diamond_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
+                placed = True
+        elif self.current_tool == 'gold':
+            if hasattr(self, 'gold_system'):
+                self.gold_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
                 placed = True
         elif self.current_tool == 'metal':
             self.metal_system.add_particle_cluster(int(game_x), int(game_y), self.brush_size)
@@ -996,6 +1012,20 @@ class ParticleGame:
         cell_x, cell_y = (int(x // cs), int(y // cs))
         nearby = []
         grid = getattr(self.diamond_system, 'grid', {})
+        for dx in range(-radius, radius + 1):
+            for dy in range(-radius, radius + 1):
+                cell = (cell_x + dx, cell_y + dy)
+                if cell in grid:
+                    nearby.extend(grid[cell])
+        return nearby
+
+    def _get_nearby_gold(self, x: float, y: float, radius: int=2) -> list:
+        if not hasattr(self, 'gold_system'):
+            return []
+        cs = getattr(self.gold_system, 'cell_size', 3)
+        cell_x, cell_y = (int(x // cs), int(y // cs))
+        nearby = []
+        grid = getattr(self.gold_system, 'grid', {})
         for dx in range(-radius, radius + 1):
             for dy in range(-radius, radius + 1):
                 cell = (cell_x + dx, cell_y + dy)
@@ -1285,6 +1315,8 @@ class ParticleGame:
             self.ruby_system.update(self._frame_index)
         if hasattr(self, 'diamond_system'):
             self.diamond_system.update(self._frame_index)
+        if hasattr(self, 'gold_system'):
+            self.gold_system.update(self._frame_index)
         if hasattr(self, 'blood_system'):
             self.blood_system.update(self._frame_index)
         if hasattr(self, 'dirt_system'):
@@ -1392,6 +1424,8 @@ class ParticleGame:
                     self.grid_bg.draw_cpu(game_surface, self.camera)
                 self.blocks_system.draw(game_surface)
                 self.metal_system.draw(game_surface)
+                if hasattr(self, 'gold_system'):
+                    self.gold_system.draw(game_surface)
                 if hasattr(self, 'ruby_system'):
                     self.ruby_system.draw(game_surface)
                 if hasattr(self, 'diamond_system'):
@@ -1440,6 +1474,8 @@ class ParticleGame:
                 if now - self._stats_updated_at > 0.25:
                     self._stats_updated_at = now
                     parts = [f'Blocks: {self.blocks_system.get_particle_count()}', f'Metal: {self.metal_system.get_particle_count()}']
+                    if hasattr(self, 'gold_system'):
+                        parts.append(f'Gold: {self.gold_system.get_particle_count()}')
                     if hasattr(self, 'ruby_system'):
                         parts.append(f'Ruby: {self.ruby_system.get_particle_count()}')
                     if hasattr(self, 'dirt_system'):
@@ -1483,6 +1519,8 @@ class ParticleGame:
                 self.grid_bg.draw_cpu(cpu_layer, self.camera)
             self.blocks_system.draw(cpu_layer)
             self.metal_system.draw(cpu_layer)
+            if hasattr(self, 'gold_system'):
+                self.gold_system.draw(cpu_layer)
             if hasattr(self, 'ruby_system'):
                 self.ruby_system.draw(cpu_layer)
             if hasattr(self, 'diamond_system'):
@@ -1536,6 +1574,15 @@ class ParticleGame:
                 m_pts_offset = [(x + self.sidebar_width, y) for x, y in m_points]
                 self.renderer.draw_color = (m_color[0], m_color[1], m_color[2], 255)
                 self.renderer.draw_points(m_pts_offset)
+            if hasattr(self, 'gold_system'):
+                try:
+                    g_color, g_points = self.gold_system.get_point_groups()
+                    if g_points:
+                        g_pts_offset = [(x + self.sidebar_width, y) for x, y in g_points]
+                        self.renderer.draw_color = (g_color[0], g_color[1], g_color[2], 255)
+                        self.renderer.draw_points(g_pts_offset)
+                except Exception:
+                    pass
             if hasattr(self, 'ruby_system'):
                 try:
                     r_color, r_points = self.ruby_system.get_point_groups()
@@ -1628,6 +1675,8 @@ class ParticleGame:
         if self._stats_cache_tex is None or now - self._stats_updated_at > 0.25:
             self._stats_updated_at = now
             parts = [f'Blocks: {self.blocks_system.get_particle_count()}', f'Metal: {self.metal_system.get_particle_count()}']
+            if hasattr(self, 'gold_system'):
+                parts.append(f'Gold: {self.gold_system.get_particle_count()}')
             if hasattr(self, 'ruby_system'):
                 parts.append(f'Ruby: {self.ruby_system.get_particle_count()}')
             if hasattr(self, 'diamond_system'):

@@ -269,6 +269,8 @@ def default_register_all(game: Any) -> CollisionManager:
 	if hasattr(game, 'dirt_system'):
 		cm.register_system('dirt', game.dirt_system, kind='solid', radius=1.0, mass=1.1)
 	cm.register_system('metal', game.metal_system, kind='solid', radius=1.0, mass=4.0)
+	if hasattr(game, 'gold_system'):
+		cm.register_system('gold', game.gold_system, kind='solid', radius=1.0, mass=3.5)
 	if hasattr(game, 'ruby_system'):
 		cm.register_system('ruby', game.ruby_system, kind='solid', radius=1.0, mass=2.2)
 	if hasattr(game, 'diamond_system'):
